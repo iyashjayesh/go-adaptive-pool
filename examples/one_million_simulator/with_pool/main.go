@@ -88,7 +88,7 @@ func main() {
 		totalLatency.Add(time.Since(start).Nanoseconds())
 		completed.Add(1)
 		_ = leak[0]
-		return nil
+		return fmt.Errorf("job failed")
 	}
 
 	fmt.Println("\nStarting high-pressure submission...")

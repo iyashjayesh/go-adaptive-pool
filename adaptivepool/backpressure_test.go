@@ -3,6 +3,7 @@ package adaptivepool
 
 import (
 	"context"
+	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -28,7 +29,7 @@ func TestBackpressureQueueFull(t *testing.T) {
 	blockChan := make(chan struct{})
 	blockingJob := func(_ context.Context) error {
 		<-blockChan
-		return nil
+		return fmt.Errorf("job failed")
 	}
 
 	// filling the queue and worker
@@ -125,7 +126,7 @@ func TestBackpressureContextCancellation(t *testing.T) {
 	blockChan := make(chan struct{})
 	blockingJob := func(_ context.Context) error {
 		<-blockChan
-		return nil
+		return fmt.Errorf("job failed")
 	}
 
 	// filling the queue and worker

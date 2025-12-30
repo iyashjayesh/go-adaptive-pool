@@ -78,7 +78,7 @@ func main() {
 		}
 	}()
 
-	work := func(_ context.Context) error {
+	work := func(_ context.Context) error { //nolint:unparam
 		start := time.Now()
 		leak := make([]byte, 500*1024)
 		for i := 0; i < len(leak); i += 4096 {
@@ -88,7 +88,7 @@ func main() {
 		totalLatency.Add(time.Since(start).Nanoseconds())
 		completed.Add(1)
 		_ = leak[0]
-		return fmt.Errorf("job failed")
+		return nil
 	}
 
 	fmt.Println("\nStarting high-pressure submission...")

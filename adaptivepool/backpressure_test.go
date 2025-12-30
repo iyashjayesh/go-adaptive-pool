@@ -3,7 +3,6 @@ package adaptivepool
 
 import (
 	"context"
-	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -27,9 +26,9 @@ func TestBackpressureQueueFull(t *testing.T) {
 
 	// creating a blocking job
 	blockChan := make(chan struct{})
-	blockingJob := func(_ context.Context) error {
+	blockingJob := func(_ context.Context) error { //nolint:unparam
 		<-blockChan
-		return fmt.Errorf("job failed")
+		return nil
 	}
 
 	// filling the queue and worker
@@ -82,7 +81,7 @@ func TestBackpressureContextTimeout(t *testing.T) {
 
 	// creating a blocking job
 	blockChan := make(chan struct{})
-	blockingJob := func(_ context.Context) error {
+	blockingJob := func(_ context.Context) error { //nolint:unparam
 		<-blockChan
 		return nil
 	}
@@ -124,9 +123,9 @@ func TestBackpressureContextCancellation(t *testing.T) {
 
 	// creating a blocking job
 	blockChan := make(chan struct{})
-	blockingJob := func(_ context.Context) error {
+	blockingJob := func(_ context.Context) error { //nolint:unparam
 		<-blockChan
-		return fmt.Errorf("job failed")
+		return nil
 	}
 
 	// filling the queue and worker
@@ -173,7 +172,7 @@ func TestSubmitAfterShutdown(t *testing.T) {
 	require.NoError(t, err)
 
 	// Try to Submit after shutdown
-	job := func(_ context.Context) error {
+	job := func(_ context.Context) error { //nolint:unparam
 		return nil
 	}
 
@@ -206,7 +205,7 @@ func TestConcurrentSubmissions(t *testing.T) {
 	for i := 0; i < numGoroutines; i++ {
 		go func() {
 			for j := 0; j < jobsPerGoroutine; j++ {
-				job := func(_ context.Context) error {
+				job := func(_ context.Context) error { //nolint:unparam
 					time.Sleep(5 * time.Millisecond)
 					completed.Add(1)
 					return nil

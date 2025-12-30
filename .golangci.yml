@@ -1,4 +1,4 @@
-version: "2"
+version: "1"
 run:
   issues-exit-code: 1
   tests: true
@@ -6,6 +6,8 @@ output:
   formats:
     text:
       path: stdout
+      print-linter-name: true
+      print-issued-lines: true
   path-prefix: ""
 linters:
   enable:
@@ -14,18 +16,36 @@ linters:
     - misspell
     - revive
     - whitespace
+  exclusions:
+    generated: lax
+    presets:
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - linters:
+          - revive
+        path: example_test.go
+        text: seems to be unused
+      - linters:
+          - revive
+        text: package-comments
+    paths:
+      - local
+      - third_party$
+      - builtin$
+      - examples$
 issues:
   max-same-issues: 100
   fix: true
-  exclude-rules:
-    - linters:
-        - revive
-      path: example_test.go
-      text: seems to be unused
-    - linters:
-        - revive
-      text: package-comments
-  exclude-dirs:
-    - examples
-    - local
-    - third_party
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+  exclusions:
+    generated: lax
+    paths:
+      - local
+      - third_party$
+      - builtin$
+      - examples$

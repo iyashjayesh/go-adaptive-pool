@@ -1,16 +1,22 @@
 version: "2"
 
+# basic run config
+run:
+  timeout: 5m
+  tests: true
+
+# Enabled linters
 linters:
   enable:
-    - revive
-    - gocritic
-    - gosec
-    - gocyclo
-    - gocognit
-    - misspell
-    - nolintlint
-    - unconvert
-    - prealloc
+    - revive      # general linter
+    - gocritic    # opinionated checks
+    - gosec       # security focus
+    - gocyclo     # complexity
+    - gocognit    # cognitive complexity
+    - misspell    # typo check
+    - nolintlint  # check for unnecessary nolints
+    - unconvert   # redundant type casts
+    - prealloc    # slice growth efficiency
 
 linters-settings:
   gocyclo:
@@ -18,16 +24,17 @@ linters-settings:
   gocognit:
     min-complexity: 20
   revive:
+    # disable mandatory doc comments for everything
+    rules:
+      - name: exported
+        disabled: true
     confidence: 0.8
 
 issues:
   exclude-rules:
+    # tests can be a bit more complex/messy
     - path: _test\.go
       linters:
         - gocyclo
         - gocognit
         - gosec
-
-run:
-  timeout: 5m
-  tests: true

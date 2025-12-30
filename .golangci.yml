@@ -1,40 +1,31 @@
 version: "2"
-
-# basic run config
 run:
-  timeout: 5m
+  issues-exit-code: 1
   tests: true
-
-# Enabled linters
+output:
+  formats:
+    text:
+      path: stdout
+  path-prefix: ""
 linters:
   enable:
-    - revive      # general linter
-    - gocritic    # opinionated checks
-    - gosec       # security focus
-    - gocyclo     # complexity
-    - gocognit    # cognitive complexity
-    - misspell    # typo check
-    - nolintlint  # check for unnecessary nolints
-    - unconvert   # redundant type casts
-    - prealloc    # slice growth efficiency
-
-linters-settings:
-  gocyclo:
-    min-complexity: 15
-  gocognit:
-    min-complexity: 20
-  revive:
-    # disable mandatory doc comments for everything
-    rules:
-      - name: exported
-        disabled: true
-    confidence: 0.8
-
+    - bodyclose
+    - copyloopvar
+    - misspell
+    - revive
+    - whitespace
 issues:
+  max-same-issues: 100
+  fix: true
   exclude-rules:
-    # tests can be a bit more complex/messy
-    - path: _test\.go
-      linters:
-        - gocyclo
-        - gocognit
-        - gosec
+    - linters:
+        - revive
+      path: example_test.go
+      text: seems to be unused
+    - linters:
+        - revive
+      text: package-comments
+  exclude-dirs:
+    - examples
+    - local
+    - third_party

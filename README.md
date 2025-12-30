@@ -4,6 +4,19 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/iyashjayesh/go-adaptive-pool)](https://goreportcard.com/report/github.com/iyashjayesh/go-adaptive-pool)
 [![GoDoc](https://godoc.org/github.com/iyashjayesh/go-adaptive-pool/adaptivepool?status.svg)](https://godoc.org/github.com/iyashjayesh/go-adaptive-pool/adaptivepool)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+![Visitors](https://api.visitorbadge.io/api/visitors?path=iyashjayesh%2Fgo-adaptive-pool%20&countColor=%23263759&style=flat)
+![GitHub last commit](  https://img.shields.io/github/last-commit/iyashjayesh/go-adaptive-pool)
+
+
+A production-grade adaptive worker pool for Go that handles dynamic scaling, backpressure, metrics and safe shutdown under load. It's built to keep your system stable when traffic spikes by not letting goroutines grow out of control.
+
+## Features
+
+- **Bounded Concurrency**: Fixed queue size prevents unbounded memory growth
+- **Explicit Backpressure**: Context-aware blocking when queue is full
+- **Adaptive Scaling**: Workers scale up/down based on queue utilization
+- **Safe Shutdown**: Graceful draining with deterministic worker cleanup
+- **Prometheus Metrics**: Built-in observability for queue depth, throughput, and latency
 
 A production-grade adaptive worker pool for Go that handles dynamic scaling, backpressure, metrics and safe shutdown under load. It's built to keep your system stable when traffic spikes by not letting goroutines grow out of control.
 

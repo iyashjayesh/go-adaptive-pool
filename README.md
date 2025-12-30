@@ -270,7 +270,9 @@ Inspired by:
 
 ## Related Documentation
 
-- [Product Document (PD.md)](PD.md) - Detailed design rationale
-- [Minimal Product Document (MPD.md)](MPD.md) - Core requirements
 - [Examples](examples/) - Complete working examples
 - [Benchmarks](benchmarks/) - Performance comparisons
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=iyashjayesh/go-adaptive-pool&type=date&legend=top-left)](https://www.star-history.com/#iyashjayesh/go-adaptive-pool&type=date&legend=top-left)

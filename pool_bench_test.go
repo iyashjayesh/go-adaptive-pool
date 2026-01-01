@@ -1,4 +1,4 @@
-package benchmarks
+package adaptivepool_test
 
 import (
 	"context"
@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/iyashjayesh/go-adaptive-pool/adaptivepool"
+	adaptivepool "github.com/iyashjayesh/go-adaptive-pool"
 )
 
 // BenchmarkPoolThroughput benchmarks the pool's throughput with different worker counts

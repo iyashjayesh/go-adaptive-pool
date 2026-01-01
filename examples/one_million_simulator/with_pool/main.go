@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/iyashjayesh/go-adaptive-pool/adaptivepool"
+	adaptivepool "github.com/iyashjayesh/go-adaptive-pool"
 )
 
 func main() {

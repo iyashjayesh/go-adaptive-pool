@@ -26,11 +26,11 @@ help:
 
 build:
 	@echo "Building adaptivepool..."
-	$(GOBUILD) ./adaptivepool/...
+	$(GOBUILD) ./...
 
 test:
 	@echo "Running tests with race detector and coverage..."
-	$(GOTEST) -race -v -coverprofile=coverage.out ./adaptivepool/...
+	$(GOTEST) -race -v -coverprofile=coverage.out ./...
 	@echo "To view coverage report: go tool cover -html=coverage.out"
 
 lint:
@@ -39,7 +39,7 @@ lint:
 
 bench:
 	@echo "Running benchmarks..."
-	$(GOTEST) -bench=. -benchmem ./benchmarks/...
+	$(GOTEST) -bench=. -benchmem ./...
 
 run-http:
 	@echo "Running HTTP server example..."
@@ -59,10 +59,10 @@ run-1m-without:
 
 run-comparison:
 	@echo "Comparing Naive vs Adaptive Pool..."
-	$(GOCMD) run scripts/compare.go
+	$(GOCMD) run examples/comparison/main.go
 
 clean:
 	@echo "Cleaning..."
 	$(GOCLEAN)
 	rm -f coverage.out
-	rm -f benchmarks/benchmark.txt
+

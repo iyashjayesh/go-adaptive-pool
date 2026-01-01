@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/iyashjayesh/go-adaptive-pool/actions/workflows/ci.yml/badge.svg)](https://github.com/iyashjayesh/go-adaptive-pool/actions/workflows/ci.yml)
 [![Go Report Card](https://goreportcard.com/badge/github.com/iyashjayesh/go-adaptive-pool)](https://goreportcard.com/report/github.com/iyashjayesh/go-adaptive-pool)
-[![GoDoc](https://godoc.org/github.com/iyashjayesh/go-adaptive-pool/adaptivepool?status.svg)](https://godoc.org/github.com/iyashjayesh/go-adaptive-pool/adaptivepool)
+[![GoDoc](https://godoc.org/github.com/iyashjayesh/go-adaptive-pool?status.svg)](https://godoc.org/github.com/iyashjayesh/go-adaptive-pool)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 ![Visitors](https://api.visitorbadge.io/api/visitors?path=iyashjayesh%2Fgo-adaptive-pool%20&countColor=%23263759&style=flat)
 ![GitHub last commit](  https://img.shields.io/github/last-commit/iyashjayesh/go-adaptive-pool)
@@ -22,7 +22,7 @@ A production-grade adaptive worker pool for Go that handles dynamic scaling, bac
 ## Installation
 
 ```bash
-go get github.com/iyashjayesh/go-adaptive-pool/adaptivepool
+go get github.com/iyashjayesh/go-adaptive-pool
 ```
 
 ## Quick Start
@@ -35,7 +35,7 @@ import (
     "log"
     "time"
 
-    "github.com/iyashjayesh/go-adaptive-pool/adaptivepool"
+    "github.com/iyashjayesh/go-adaptive-pool"
 )
 
 func main() {
@@ -186,6 +186,8 @@ We performed an extreme pressure test (1M RPS target for 30s with 500KB tasks) t
 **Why the Pool Wins:**
 Under extreme load, the Naive approach causes a "Goroutine Explosion" and "Memory Bomb" that forces the Go runtime into constant Garbage Collection, leading to unusable 2-second latencies. The `go-adaptive-pool` shields your system by enforcing backpressure and resource caps.
 
+For a detailed deep-dive into this test and the mechanics of the pool, check out the blog post: [Scaling to 1 Million RPS](https://iyashjayesh.github.io/go-adaptive-pool-website/blog/scaling-to-1m-rps/).
+
 **Run the comparison yourself:**
 ```bash
 make run-comparison
@@ -196,7 +198,6 @@ make run-comparison
 Run standard micro-benchmarks:
 
 ```bash
-cd benchmarks
 go test -bench=. -benchmem -benchtime=10s
 ```
 
@@ -245,13 +246,13 @@ Key components:
 Run tests with race detector:
 
 ```bash
-go test -race -v ./adaptivepool/
+go test -race -v ./...
 ```
 
 Run with coverage:
 
 ```bash
-go test -race -coverprofile=coverage.out ./adaptivepool/
+go test -race -coverprofile=coverage.out ./...
 go tool cover -html=coverage.out
 ```
 
@@ -273,7 +274,7 @@ Inspired by:
 ## Related Documentation
 
 - [Examples](examples/) - Complete working examples
-- [Benchmarks](benchmarks/) - Performance comparisons
+- [Benchmarks](.) - Performance comparisons
 
 ## Star History
 

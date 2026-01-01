@@ -12,7 +12,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/iyashjayesh/go-adaptive-pool/adaptivepool"
+	adaptivepool "github.com/iyashjayesh/go-adaptive-pool"
 )
 
 var pool adaptivepool.Pool

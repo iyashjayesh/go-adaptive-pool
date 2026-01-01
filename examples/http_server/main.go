@@ -135,7 +135,7 @@ func handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	metrics := pool.Metrics()
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"queue_depth":     metrics.QueueDepth(),
 		"active_workers":  metrics.ActiveWorkers(),
 		"jobs_processed":  metrics.JobsProcessed(),

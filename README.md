@@ -7,17 +7,39 @@
 ![Visitors](https://api.visitorbadge.io/api/visitors?path=iyashjayesh%2Fgo-adaptive-pool%20&countColor=%23263759&style=flat)
 ![GitHub last commit](  https://img.shields.io/github/last-commit/iyashjayesh/go-adaptive-pool)
 
-A resilient adaptive worker pool for Go that handles dynamic scaling, backpressure, metrics and safe shutdown under load. It's built to keep your system stable when traffic spikes by not letting goroutines grow out of control.
+> `go-adaptive-pool` is a bounded worker pool for Go with an adaptive worker lifecycle and explicit backpressure, designed to keep systems stable under bursty load.
 
-## Features
+> The goal is not to maximize throughput at all costs, but to prevent unbounded goroutine growth, avoid OOMs, and force overload to be handled explicitly instead of crashing later.
 
-- **Bounded Concurrency**: Fixed queue size prevents unbounded memory growth
-- **Explicit Backpressure**: Context-aware blocking when queue is full
-- **Adaptive Scaling**: Workers scale up/down based on queue utilization
-- **Safe Shutdown**: Graceful draining with deterministic worker cleanup
-- **Prometheus Metrics**: Built-in observability for queue depth, throughput, and latency
-- **Zero Global State**: Multiple pool instances with isolated metrics
-- **Production Ready**: Comprehensive tests with race detector and goroutine leak detection
+## What this library does
+
+This pool focuses on controlling concurrency and memory usage when job submission can outpace processing.
+
+It provides:
+
+- Bounded concurrency via a fixed-size queue
+- Adaptive worker lifecycle. Workers scale up and down based on queue pressure
+- Explicit backpressure. When the queue is full, submissions block or fail fast
+- Observability via built-in Prometheus metrics
+- Safe shutdown with graceful draining and no goroutine leaks
+
+The `adaptive` behavior here is worker lifecycle adaptation, not request-level concurrency control.
+
+## Key features
+
+- *Bounded queue*
+    - Fixed queue size to prevent unbounded memory growth.
+- *Adaptive worker lifecycle*
+    - Workers scale up and down based on queue utilization, within configured limits.
+- *Explicit backpressure*
+    - When overloaded, submissions block or are rejected. The caller must handle it.
+- *Observability*
+    - Built-in Prometheus metrics:
+        - queue depth
+        - throughput
+        - latency
+- *Safe shutdown*
+    - Graceful draining of queued jobs and clean worker shutdown with no leaks.
 
 ## Installation
 
@@ -171,6 +193,37 @@ See [examples/batch_processor](examples/batch_processor/main.go) for processing 
 cd examples/batch_processor
 go run main.go
 ```
+
+## Scope and non-goals
+
+This library is intentionally narrow in scope.
+
+It does NOT:
+
+- Perform latency- or error-driven adaptive concurrency control
+- Implement AIMD-style or feedback-loop–based limiters
+- Replace adaptive limiters like failsafe-go or go-adaptive-limiter
+
+It DOES:
+
+- Enforce hard limits on concurrency and memory usage
+- Prevent goroutine explosions under burst load
+- Apply backpressure when the system is overloaded
+- Make overload visible and explicit instead of failing implicitly
+
+If you already have a well-tuned adaptive limiter controlling request concurrency, a fixed-size worker pool may be sufficient.
+
+## Why this exists
+
+In many real systems, goroutines are cheap individually but unbounded submission is not.
+
+Under traffic spikes, naive patterns often lead to: 
+- Runaway goroutine creation
+- Unbounded queues
+- Memory pressure and OOMs
+- Failure modes that only appear under load
+
+This pool enforces limits and predictable behavior by design.
 
 ## 1 Million RPS Stress Test
 

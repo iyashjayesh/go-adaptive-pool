@@ -84,7 +84,7 @@ func main() {
 
 	// Submit tasks
 	SubmitStart := time.Now()
-	for i := 0; i < numTasks; i++ {
+	for i := range numTasks {
 		if ctx.Err() != nil {
 			break
 		}

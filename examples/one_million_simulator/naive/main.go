@@ -133,7 +133,7 @@ func runSubmission(ctx context.Context, s *stats) {
 	var wg sync.WaitGroup
 	wg.Add(generators)
 
-	for i := 0; i < generators; i++ {
+	for range generators {
 		go SubmitLoop(ctx, s, &wg)
 	}
 

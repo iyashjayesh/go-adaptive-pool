@@ -50,8 +50,8 @@ func parseOutput(output string) Stats {
 
 	// Fallback: If no summary (crashed), parse the last periodic log line
 	if s.Completed == "" && lastLogLine != "" {
-		parts := strings.Split(lastLogLine, "|")
-		for _, p := range parts {
+		parts := strings.SplitSeq(lastLogLine, "|")
+		for p := range parts {
 			switch {
 			case strings.Contains(p, "Goro:"):
 				s.PeakGoro = strings.TrimSpace(strings.Split(p, ":")[1]) + " (Crashed)"

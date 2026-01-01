@@ -98,7 +98,7 @@ func main() {
 	var wg sync.WaitGroup
 	wg.Add(numGenerators)
 
-	for i := 0; i < numGenerators; i++ {
+	for range numGenerators {
 		go func() {
 			defer wg.Done()
 			for {

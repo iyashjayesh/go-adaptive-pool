@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/iyashjayesh/go-adaptive-pool"
+	adaptivepool "github.com/iyashjayesh/go-adaptive-pool"
 )
 
 // BenchmarkNaiveGoroutines benchmarks spawning a goroutine for each job

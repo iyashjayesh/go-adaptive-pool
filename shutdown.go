@@ -41,7 +41,7 @@ func (p *pool) Shutdown(ctx context.Context) error {
 
 			// Signal all workers to terminate
 			currentWorkers := p.state.getWorkerCount()
-			for i := 0; i < currentWorkers; i++ {
+			for range currentWorkers {
 				select {
 				case p.state.workerShutdown <- struct{}{}:
 				default:

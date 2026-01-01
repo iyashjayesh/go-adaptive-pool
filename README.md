@@ -7,7 +7,7 @@
 ![Visitors](https://api.visitorbadge.io/api/visitors?path=iyashjayesh%2Fgo-adaptive-pool%20&countColor=%23263759&style=flat)
 ![GitHub last commit](  https://img.shields.io/github/last-commit/iyashjayesh/go-adaptive-pool)
 
-A production-grade adaptive worker pool for Go that handles dynamic scaling, backpressure, metrics and safe shutdown under load. It's built to keep your system stable when traffic spikes by not letting goroutines grow out of control.
+A resilient adaptive worker pool for Go that handles dynamic scaling, backpressure, metrics and safe shutdown under load. It's built to keep your system stable when traffic spikes by not letting goroutines grow out of control.
 
 ## Features
 

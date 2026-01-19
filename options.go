@@ -75,6 +75,22 @@ func WithScaleCooldown(d time.Duration) Option {
 	}
 }
 
+// WithAutoConfig applies a predefined workload profile for automatic configuration
+// This configures MinWorkers, MaxWorkers, and QueueSize based on system resources
+func WithAutoConfig(profile WorkloadProfile) Option {
+	return func(c *Config) {
+		applyProfile(c, profile)
+	}
+}
+
+// WithSystemAwareConfig applies advanced system-aware configuration
+// This analyzes system resources and workload characteristics to optimize pool parameters
+func WithSystemAwareConfig(sysConfig SystemAwareConfig) Option {
+	return func(c *Config) {
+		applySystemAwareConfig(c, sysConfig)
+	}
+}
+
 // defaultConfig returns the default configuration
 func defaultConfig() *Config {
 	return &Config{
@@ -109,4 +125,39 @@ func (c *Config) validate() error {
 		return ErrInvalidConfig
 	}
 	return nil
+}
+
+// MinWorkers returns the minimum number of workers
+func (c *Config) MinWorkers() int {
+	return c.minWorkers
+}
+
+// MaxWorkers returns the maximum number of workers
+func (c *Config) MaxWorkers() int {
+	return c.maxWorkers
+}
+
+// QueueSize returns the queue size
+func (c *Config) QueueSize() int {
+	return c.queueSize
+}
+
+// ScaleUpThreshold returns the scale up threshold
+func (c *Config) ScaleUpThreshold() float64 {
+	return c.scaleUpThreshold
+}
+
+// ScaleDownIdleDuration returns the scale down idle duration
+func (c *Config) ScaleDownIdleDuration() time.Duration {
+	return c.scaleDownIdleDuration
+}
+
+// MetricsEnabled returns whether metrics are enabled
+func (c *Config) MetricsEnabled() bool {
+	return c.metricsEnabled
+}
+
+// ScaleCooldown returns the scale cooldown duration
+func (c *Config) ScaleCooldown() time.Duration {
+	return c.scaleCooldown
 }

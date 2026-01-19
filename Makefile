@@ -1,4 +1,4 @@
-.PHONY: all build test lint bench run-http run-batch help clean
+.PHONY: all build test lint bench run-autoconfig run-http run-batch help clean
 
 # Go parameters
 GOCMD=go
@@ -19,6 +19,7 @@ help:
 	@echo "  test          Run unit tests with race detector and coverage"
 	@echo "  lint          Run golangci-lint"
 	@echo "  bench         Run all benchmarks"
+	@echo "  run-autoconfig Run the auto-configuration example"
 	@echo "  run-http      Run the HTTP server example"
 	@echo "  run-batch     Run the batch processor example"
 	@echo "  clean         Clean build artifacts and coverage files"
@@ -40,6 +41,10 @@ lint:
 bench:
 	@echo "Running benchmarks..."
 	$(GOTEST) -bench=. -benchmem ./...
+
+run-autoconfig:
+	@echo "Running auto-configuration example..."
+	$(GOCMD) run examples/autoconfig/main.go
 
 run-http:
 	@echo "Running HTTP server example..."

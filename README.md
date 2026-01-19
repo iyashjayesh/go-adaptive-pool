@@ -87,6 +87,51 @@ func main() {
 
 ## Configuration Options
 
+### Auto-Configuration (Recommended)
+
+The pool provides intelligent auto-configuration based on system resources and workload profiles:
+
+```go
+// Simple profile-based configuration
+pool, err := adaptivepool.New(
+    adaptivepool.WithAutoConfig(adaptivepool.ProfileAPIServer),
+)
+
+// Advanced system-aware configuration
+pool, err := adaptivepool.New(
+    adaptivepool.WithSystemAwareConfig(adaptivepool.SystemAwareConfig{
+        WorkloadType:       adaptivepool.IOBound,
+        TargetLatencyMs:    500,
+        AvgJobMemoryBytes:  50 * 1024, // 50KB per job
+        MemoryLimitPercent: 0.2,       // Use 20% of available memory
+    }),
+)
+
+// Get configuration suggestions
+config := adaptivepool.SuggestConfig(adaptivepool.IOBound)
+fmt.Printf("Suggested min workers: %d\n", config.MinWorkers())
+fmt.Printf("Suggested max workers: %d\n", config.MaxWorkers())
+fmt.Printf("Suggested queue size: %d\n", config.QueueSize())
+```
+
+**Available Workload Profiles:**
+
+| Profile | Use Case | Min Workers | Max Workers | Queue Size |
+|---------|----------|-------------|-------------|------------|
+| `ProfileAPIServer` | I/O bound API servers | 2x CPU | 10x CPU | 20x Max Workers |
+| `ProfileCPUIntensive` | CPU-bound tasks | 1x CPU | 2x CPU | 5x Max Workers |
+| `ProfileBatchProcessor` | Batch processing | 2x CPU | 4x CPU | 50x Max Workers |
+
+**Workload Types for System-Aware Config:**
+
+- `IOBound` - Tasks that spend most time waiting on I/O (network, disk, databases)
+- `CPUBound` - Compute-intensive tasks that max out CPU
+- `Mixed` - Workloads with both I/O and CPU characteristics
+
+### Manual Configuration
+
+For fine-grained control, configure parameters manually:
+
 ```go
 pool, err := adaptivepool.New(
     // Minimum workers (default: 1)
@@ -109,6 +154,18 @@ pool, err := adaptivepool.New(
     
     // Enable/disable metrics (default: true)
     adaptivepool.WithMetricsEnabled(true),
+)
+```
+
+### Combining Auto-Config with Manual Overrides
+
+You can start with a profile and override specific settings:
+
+```go
+pool, err := adaptivepool.New(
+    adaptivepool.WithAutoConfig(adaptivepool.ProfileAPIServer),
+    adaptivepool.WithMinWorkers(8), // Override min workers
+    adaptivepool.WithQueueSize(10000), // Override queue size
 )
 ```
 
@@ -168,6 +225,19 @@ Shutdown behavior:
 4. Returns error if jobs were dropped
 
 ## Examples
+
+### Auto-Configuration
+
+See [examples/autoconfig](examples/autoconfig/main.go) for demonstrations of:
+- Profile-based auto-configuration
+- System-aware configuration with memory constraints
+- Configuration suggestions for different workload types
+- Combining auto-config with manual overrides
+
+```bash
+cd examples/autoconfig
+go run main.go
+```
 
 ### HTTP Server with Backpressure
 

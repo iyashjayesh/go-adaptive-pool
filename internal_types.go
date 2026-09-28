@@ -16,6 +16,8 @@ type jobWrapper struct {
 	SubmittedAt time.Time
 	id          uint64
 	ctx         context.Context
+	taskID      string
+	kind        string
 }
 
 // shutdownState represents the shutdown state of the pool

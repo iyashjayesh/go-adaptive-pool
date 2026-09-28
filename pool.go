@@ -15,6 +15,9 @@ type Pool interface {
 	// Blocks until the job is enqueued or context is cancelled
 	Submit(ctx context.Context, job Job) error
 
+	// SubmitTask is like Submit but carries a task ID and kind for logs and metrics
+	SubmitTask(ctx context.Context, task Task) error
+
 	// Shutdown gracefully shuts down the pool
 	// Waits for in-flight jobs to complete within the context timeout
 	Shutdown(ctx context.Context) error

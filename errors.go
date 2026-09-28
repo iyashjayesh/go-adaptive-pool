@@ -12,6 +12,9 @@ var (
 	// ErrTimeout is returned when a job submission times out
 	ErrTimeout = errors.New("submission timeout")
 
+	// ErrNilJob is returned when submitting a nil job
+	ErrNilJob = errors.New("job is nil")
+
 	// ErrInvalidConfig is returned when pool configuration is invalid
 	ErrInvalidConfig = errors.New("invalid pool configuration")
 )

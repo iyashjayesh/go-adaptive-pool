@@ -2,7 +2,7 @@ package adaptivepool
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"time"
 )
 
@@ -11,7 +11,7 @@ func (p *pool) Shutdown(ctx context.Context) error {
 	var shutdownErr error
 
 	p.state.shutdownOnce.Do(func() {
-		log.Println("initiating pool shutdown")
+		p.logger.Info("initiating pool shutdown")
 
 		// Transition to draining state
 		p.state.setShutdownState(shutdownStateDraining)
@@ -33,11 +33,11 @@ func (p *pool) Shutdown(ctx context.Context) error {
 		select {
 		case <-workersDone:
 			// All workers finished gracefully
-			log.Println("all workers finished gracefully")
+			p.logger.Info("all workers finished gracefully")
 
 		case <-ctx.Done():
 			// Timeout or cancellation - force shutdown
-			log.Println("shutdown timeout, forcing worker termination")
+			p.logger.Warn("shutdown timeout, forcing worker termination")
 
 			// Signal all workers to terminate
 			currentWorkers := p.state.getWorkerCount()
@@ -51,9 +51,9 @@ func (p *pool) Shutdown(ctx context.Context) error {
 			// Wait a bit more for workers to respond
 			select {
 			case <-workersDone:
-				log.Println("workers terminated after force signal")
+				p.logger.Info("workers terminated after force signal")
 			case <-time.After(1 * time.Second):
-				log.Println("some workers may not have terminated cleanly")
+				p.logger.Warn("some workers may not have terminated cleanly")
 				shutdownErr = ctx.Err()
 			}
 		}
@@ -65,9 +65,9 @@ func (p *pool) Shutdown(ctx context.Context) error {
 		// Check if there are any jobs left in the queue
 		remainingJobs := p.state.getQueueDepth()
 		if remainingJobs > 0 {
-			log.Printf("shutdown complete with %d jobs remaining in queue", remainingJobs)
+			p.logger.Warn("shutdown complete with jobs remaining in queue", slog.Int("remaining", remainingJobs))
 		} else {
-			log.Println("shutdown complete, all jobs processed")
+			p.logger.Info("shutdown complete, all jobs processed")
 		}
 	})
 

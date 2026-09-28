@@ -3,7 +3,8 @@ package adaptivepool
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
+	"runtime/debug"
 	"sync"
 	"time"
 )
@@ -31,6 +32,7 @@ type pool struct {
 	config  *Config
 	state   *poolState
 	metrics *metrics
+	logger  *slog.Logger
 
 	// Dispatcher coordination
 	dispatcherWg     sync.WaitGroup
@@ -64,6 +66,7 @@ func New(options ...Option) (Pool, error) {
 		config:           config,
 		state:            state,
 		metrics:          metrics,
+		logger:           newLogger(config),
 		dispatcherCtx:    dispatcherCtx,
 		dispatcherCancel: dispatcherCancel,
 	}
@@ -78,6 +81,18 @@ func New(options ...Option) (Pool, error) {
 	}
 
 	return p, nil
+}
+
+// newLogger resolves the configured logger and binds the pool name to it
+func newLogger(c *Config) *slog.Logger {
+	l := c.logger
+	if l == nil {
+		l = slog.Default()
+	}
+	if c.name != "" {
+		l = l.With(slog.String("pool", c.name))
+	}
+	return l
 }
 
 // Metrics returns the pool metrics
@@ -169,18 +184,28 @@ func (p *pool) executeJob(workerID int, job jobWrapper) {
 	start := time.Now()
 
 	defer func() {
-		if r := recover(); r != nil {
-			log.Printf("worker %d: panic executing job %d: %v", workerID, job.id, r)
-		}
-
-		// Record metrics
 		latency := time.Since(start)
+		if r := recover(); r != nil {
+			p.logger.LogAttrs(job.ctx, slog.LevelError, "task panicked",
+				slog.Int("worker", workerID),
+				slog.String("task_id", job.taskID),
+				slog.String("kind", job.kind),
+				slog.Duration("duration", latency),
+				slog.Any("panic", r),
+				slog.String("stack", string(debug.Stack())),
+			)
+		}
 		p.metrics.recordJobProcessed(latency)
 	}()
 
-	// Execute the job
 	if err := job.job(job.ctx); err != nil {
-		log.Printf("worker %d: job %d failed: %v", workerID, job.id, err)
+		p.logger.LogAttrs(job.ctx, slog.LevelError, "task failed",
+			slog.Int("worker", workerID),
+			slog.String("task_id", job.taskID),
+			slog.String("kind", job.kind),
+			slog.Duration("duration", time.Since(start)),
+			slog.Any("err", err),
+		)
 	}
 }
 
@@ -219,5 +244,5 @@ func (p *pool) scaleUp() {
 	}
 
 	p.state.lastScaleUp = time.Now()
-	log.Printf("scaled up: added %d workers (total: %d)", toAdd, p.state.getWorkerCount())
+	p.logger.Info("scaled up", slog.Int("added", toAdd), slog.Int("workers", p.state.getWorkerCount()))
 }

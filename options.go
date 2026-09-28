@@ -1,6 +1,7 @@
 package adaptivepool
 
 import (
+	"log/slog"
 	"runtime"
 	"time"
 )
@@ -14,6 +15,8 @@ type Config struct {
 	scaleDownIdleDuration time.Duration
 	metricsEnabled        bool
 	scaleCooldown         time.Duration
+	name                  string
+	logger                *slog.Logger
 }
 
 // Option is a functional option for configuring the pool
@@ -72,6 +75,23 @@ func WithMetricsEnabled(enabled bool) Option {
 func WithScaleCooldown(d time.Duration) Option {
 	return func(c *Config) {
 		c.scaleCooldown = d
+	}
+}
+
+// WithName names the pool. The name is attached to every log record and
+// metric so multiple pools in one process can be told apart.
+// Default: "" (unnamed)
+func WithName(name string) Option {
+	return func(c *Config) {
+		c.name = name
+	}
+}
+
+// WithLogger sets the structured logger used by the pool.
+// Default: slog.Default()
+func WithLogger(l *slog.Logger) Option {
+	return func(c *Config) {
+		c.logger = l
 	}
 }
 

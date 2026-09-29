@@ -37,6 +37,7 @@ type poolState struct {
 	// Worker management
 	workerWg       sync.WaitGroup
 	workerCount    atomic.Int32
+	busyWorkers    atomic.Int32
 	workerShutdown chan struct{}
 
 	// Shutdown coordination

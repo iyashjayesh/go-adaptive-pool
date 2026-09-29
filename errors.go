@@ -1,6 +1,9 @@
 package adaptivepool
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+)
 
 var (
 	// ErrPoolShutdown is returned when attempting to Submit a job to a shutdown pool
@@ -18,3 +21,14 @@ var (
 	// ErrInvalidConfig is returned when pool configuration is invalid
 	ErrInvalidConfig = errors.New("invalid pool configuration")
 )
+
+// PanicError is the error recorded when a job panics. Stack holds the
+// goroutine stack captured at the time of the panic.
+type PanicError struct {
+	Value any
+	Stack []byte
+}
+
+func (e *PanicError) Error() string {
+	return fmt.Sprintf("job panicked: %v", e.Value)
+}

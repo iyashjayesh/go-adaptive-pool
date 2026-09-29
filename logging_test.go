@@ -28,6 +28,7 @@ func TestLogsTaskFailure(t *testing.T) {
 	assert.Equal(t, "emails", r["pool"])
 	assert.Equal(t, "order-42", r["task_id"])
 	assert.Equal(t, "send_email", r["kind"])
+	assert.Equal(t, "error", r["status"])
 	assert.Equal(t, "smtp down", r["err"])
 }
 
@@ -37,8 +38,23 @@ func TestLogsTaskPanicWithStack(t *testing.T) {
 
 	require.NoError(t, p.Submit(context.Background(), func(context.Context) error { panic("boom") }))
 
-	require.Eventually(t, func() bool { return len(rec.records("task panicked")) == 1 }, 2*time.Second, 10*time.Millisecond)
-	r := rec.records("task panicked")[0]
-	assert.Equal(t, "boom", r["panic"])
-	assert.Contains(t, r["stack"], "executeJob")
+	require.Eventually(t, func() bool { return len(rec.records("task failed")) == 1 }, 2*time.Second, 10*time.Millisecond)
+	r := rec.records("task failed")[0]
+	assert.Equal(t, "panic", r["status"])
+	assert.Equal(t, "job panicked: boom", r["err"])
+	assert.Contains(t, r["stack"], "runJob")
+}
+
+func TestLogsShutdownWithPoolName(t *testing.T) {
+	var rec logRecorder
+	p, err := New(WithName("emails"), WithLogger(rec.logger(slog.LevelInfo)))
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	require.NoError(t, p.Shutdown(ctx))
+
+	records := rec.records("initiating pool shutdown")
+	require.Len(t, records, 1)
+	assert.Equal(t, "emails", records[0]["pool"])
 }

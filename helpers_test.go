@@ -26,6 +26,10 @@ func newTestPool(t *testing.T, opts ...Option) Pool {
 	return p
 }
 
+func discardLogger() *slog.Logger {
+	return slog.New(slog.DiscardHandler)
+}
+
 // logRecorder captures JSON log records written by the pool.
 type logRecorder struct {
 	mu  sync.Mutex

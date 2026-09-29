@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"runtime/debug"
 	"sync"
 	"time"
 )
@@ -176,36 +175,6 @@ func (p *pool) runWorker(id int) {
 	}
 }
 
-// executeJob executes a job with panic recovery and metrics
-func (p *pool) executeJob(workerID int, job jobWrapper) {
-	start := time.Now()
-
-	defer func() {
-		latency := time.Since(start)
-		if r := recover(); r != nil {
-			p.logger.LogAttrs(job.ctx, slog.LevelError, "task panicked",
-				slog.Int("worker", workerID),
-				slog.String("task_id", job.taskID),
-				slog.String("kind", job.kind),
-				slog.Duration("duration", latency),
-				slog.Any("panic", r),
-				slog.String("stack", string(debug.Stack())),
-			)
-		}
-		p.metrics.recordJobProcessed(latency)
-	}()
-
-	if err := job.job(job.ctx); err != nil {
-		p.logger.LogAttrs(job.ctx, slog.LevelError, "task failed",
-			slog.Int("worker", workerID),
-			slog.String("task_id", job.taskID),
-			slog.String("kind", job.kind),
-			slog.Duration("duration", time.Since(start)),
-			slog.Any("err", err),
-		)
-	}
-}
-
 // checkScaling checks if we need to scale workers up or down
 func (p *pool) checkScaling() {
 	utilization := p.state.getQueueUtilization()
@@ -241,5 +210,6 @@ func (p *pool) scaleUp() {
 	}
 
 	p.state.lastScaleUp = time.Now()
+	p.metrics.recordScaleUp()
 	p.logger.Info("scaled up", slog.Int("added", toAdd), slog.Int("workers", p.state.getWorkerCount()))
 }

@@ -7,6 +7,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
+const metricsNamespace = "adaptivepool"
+
 // Metrics provides observability into pool behavior
 type Metrics interface {
 	// QueueDepth returns the current number of jobs in the queue
@@ -37,55 +39,89 @@ type metrics struct {
 	// Reference to pool state for current values
 	state *poolState
 
-	// Prometheus metrics (optional)
-	promQueueDepth    prometheus.Gauge
-	promActiveWorkers prometheus.Gauge
+	// Prometheus metrics (optional). Gauges are GaugeFuncs read at scrape
+	// time, so they cost nothing between scrapes.
+	collectors        []prometheus.Collector
 	promJobsProcessed prometheus.Counter
 	promJobsRejected  prometheus.Counter
 	promJobLatency    prometheus.Histogram
 }
 
 // newMetrics Creates a new metrics collector
-func newMetrics(state *poolState, enabled bool, namespace string) *metrics {
+func newMetrics(state *poolState, config *Config) *metrics {
 	m := &metrics{
-		enabled: enabled,
+		enabled: config.metricsEnabled,
 		state:   state,
 	}
+	if !m.enabled {
+		return m
+	}
 
-	if enabled {
-		m.promQueueDepth = prometheus.NewGauge(prometheus.GaugeOpts{
-			Namespace: namespace,
-			Name:      "queue_depth",
-			Help:      "Current number of jobs in the queue",
-		})
+	var constLabels prometheus.Labels
+	if config.name != "" {
+		constLabels = prometheus.Labels{"pool": config.name}
+	}
+	gauge := func(name, help string, fn func() float64) prometheus.Collector {
+		return prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+			Namespace: metricsNamespace, Name: name, Help: help, ConstLabels: constLabels,
+		}, fn)
+	}
 
-		m.promActiveWorkers = prometheus.NewGauge(prometheus.GaugeOpts{
-			Namespace: namespace,
-			Name:      "active_workers",
-			Help:      "Current number of active workers",
-		})
+	m.promJobsProcessed = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace:   metricsNamespace,
+		Name:        "jobs_processed_total",
+		Help:        "Total number of jobs processed",
+		ConstLabels: constLabels,
+	})
+	m.promJobsRejected = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace:   metricsNamespace,
+		Name:        "jobs_rejected_total",
+		Help:        "Total number of jobs rejected",
+		ConstLabels: constLabels,
+	})
+	m.promJobLatency = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Namespace:   metricsNamespace,
+		Name:        "job_latency_seconds",
+		Help:        "Job execution latency in seconds",
+		Buckets:     prometheus.DefBuckets,
+		ConstLabels: constLabels,
+	})
 
-		m.promJobsProcessed = prometheus.NewCounter(prometheus.CounterOpts{
-			Namespace: namespace,
-			Name:      "jobs_processed_total",
-			Help:      "Total number of jobs processed",
-		})
-
-		m.promJobsRejected = prometheus.NewCounter(prometheus.CounterOpts{
-			Namespace: namespace,
-			Name:      "jobs_rejected_total",
-			Help:      "Total number of jobs rejected",
-		})
-
-		m.promJobLatency = prometheus.NewHistogram(prometheus.HistogramOpts{
-			Namespace: namespace,
-			Name:      "job_latency_seconds",
-			Help:      "Job execution latency in seconds",
-			Buckets:   prometheus.DefBuckets,
-		})
+	m.collectors = []prometheus.Collector{
+		m.promJobsProcessed,
+		m.promJobsRejected,
+		m.promJobLatency,
+		gauge("queue_depth", "Current number of jobs in the queue",
+			func() float64 { return float64(state.getQueueDepth()) }),
+		gauge("queue_capacity", "Capacity of the job queue",
+			func() float64 { return float64(state.getQueueCapacity()) }),
+		gauge("active_workers", "Current number of active workers",
+			func() float64 { return float64(state.getWorkerCount()) }),
+		gauge("max_workers", "Configured maximum number of workers",
+			func() float64 { return float64(config.maxWorkers) }),
 	}
 
 	return m
+}
+
+// register registers all collectors, rolling back on failure
+func (m *metrics) register(reg prometheus.Registerer) error {
+	for i, c := range m.collectors {
+		if err := reg.Register(c); err != nil {
+			for _, done := range m.collectors[:i] {
+				reg.Unregister(done)
+			}
+			return err
+		}
+	}
+	return nil
+}
+
+// unregister removes all collectors from the registry
+func (m *metrics) unregister(reg prometheus.Registerer) {
+	for _, c := range m.collectors {
+		reg.Unregister(c)
+	}
 }
 
 // QueueDepth returns the current queue depth
@@ -135,13 +171,5 @@ func (m *metrics) recordJobRejected() {
 
 	if m.enabled {
 		m.promJobsRejected.Inc()
-	}
-}
-
-// updateGauges updates the gauge metrics
-func (m *metrics) updateGauges() {
-	if m.enabled {
-		m.promQueueDepth.Set(float64(m.QueueDepth()))
-		m.promActiveWorkers.Set(float64(m.ActiveWorkers()))
 	}
 }

@@ -4,6 +4,8 @@ import (
 	"log/slog"
 	"runtime"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // Config holds the configuration for the pool
@@ -17,6 +19,7 @@ type Config struct {
 	scaleCooldown         time.Duration
 	name                  string
 	logger                *slog.Logger
+	registerer            prometheus.Registerer
 }
 
 // Option is a functional option for configuring the pool
@@ -84,6 +87,16 @@ func WithScaleCooldown(d time.Duration) Option {
 func WithName(name string) Option {
 	return func(c *Config) {
 		c.name = name
+	}
+}
+
+// WithPrometheusRegisterer registers the pool's Prometheus metrics with reg
+// (e.g. prometheus.DefaultRegisterer). Metrics are unregistered on Shutdown.
+// Use WithName to give each pool sharing a registry a distinct "pool" label.
+// Default: nil (metrics are tracked but not registered)
+func WithPrometheusRegisterer(reg prometheus.Registerer) Option {
+	return func(c *Config) {
+		c.registerer = reg
 	}
 }
 

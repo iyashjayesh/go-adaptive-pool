@@ -56,8 +56,12 @@ func New(options ...Option) (Pool, error) {
 	// creating pool state
 	state := newPoolState(config.queueSize)
 
-	// creating metrics
-	metrics := newMetrics(state, config.metricsEnabled, "adaptivepool")
+	metrics := newMetrics(state, config)
+	if config.registerer != nil {
+		if err := metrics.register(config.registerer); err != nil {
+			return nil, fmt.Errorf("registering metrics: %w", err)
+		}
+	}
 
 	// creating dispatcher context
 	dispatcherCtx, dispatcherCancel := context.WithCancel(context.Background())
@@ -114,9 +118,6 @@ func (p *pool) runDispatcher() {
 	scaleTicker := time.NewTicker(1 * time.Second)
 	defer scaleTicker.Stop()
 
-	metricsTicker := time.NewTicker(5 * time.Second)
-	defer metricsTicker.Stop()
-
 	for {
 		select {
 		case <-p.dispatcherCtx.Done():
@@ -126,10 +127,6 @@ func (p *pool) runDispatcher() {
 		case <-scaleTicker.C:
 			// Check if we need to scale
 			p.checkScaling()
-
-		case <-metricsTicker.C:
-			// Update gauge metrics
-			p.metrics.updateGauges()
 		}
 	}
 }

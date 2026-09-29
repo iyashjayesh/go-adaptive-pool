@@ -58,6 +58,10 @@ func (p *pool) Shutdown(ctx context.Context) error {
 			}
 		}
 
+		if p.config.registerer != nil {
+			p.metrics.unregister(p.config.registerer)
+		}
+
 		// Transition to terminated state
 		p.state.setShutdownState(shutdownStateTerminated)
 		close(p.state.shutdownDone)

@@ -3,7 +3,6 @@ package adaptivepool
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"testing"
 	"time"
 
@@ -13,7 +12,7 @@ import (
 
 func TestLogsTaskFailure(t *testing.T) {
 	var rec logRecorder
-	p := newTestPool(t, WithName("emails"), WithLogger(rec.logger(slog.LevelInfo)))
+	p := newTestPool(t, WithName("emails"), WithLogger(rec.logger()))
 
 	err := p.SubmitTask(context.Background(), Task{
 		ID:   "order-42",
@@ -34,7 +33,7 @@ func TestLogsTaskFailure(t *testing.T) {
 
 func TestLogsTaskPanicWithStack(t *testing.T) {
 	var rec logRecorder
-	p := newTestPool(t, WithLogger(rec.logger(slog.LevelInfo)))
+	p := newTestPool(t, WithLogger(rec.logger()))
 
 	require.NoError(t, p.Submit(context.Background(), func(context.Context) error { panic("boom") }))
 
@@ -47,7 +46,7 @@ func TestLogsTaskPanicWithStack(t *testing.T) {
 
 func TestLogsShutdownWithPoolName(t *testing.T) {
 	var rec logRecorder
-	p, err := New(WithName("emails"), WithLogger(rec.logger(slog.LevelInfo)))
+	p, err := New(WithName("emails"), WithLogger(rec.logger()))
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

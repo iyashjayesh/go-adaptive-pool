@@ -1,6 +1,9 @@
 package adaptivepool
 
-import "errors"
+import (
+	"errors"
+	"time"
+)
 
 // Task is a Job annotated with identity used for observability.
 type Task struct {
@@ -14,6 +17,23 @@ type Task struct {
 
 	// Run is the work to execute.
 	Run Job
+}
+
+// TaskResult describes how a task finished. It is passed to the OnTaskDone hook.
+type TaskResult struct {
+	ID   string
+	Kind string
+
+	// QueueWait is the time between submission and the start of execution
+	QueueWait time.Duration
+	// Duration is the total execution time, including any retries
+	Duration time.Duration
+	// Attempts is the number of times the job was run
+	Attempts int
+
+	Status Status
+	// Err is the final error, nil on success
+	Err error
 }
 
 // Status describes how a task finished. The same values are used for the

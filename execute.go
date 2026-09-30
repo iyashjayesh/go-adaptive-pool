@@ -17,10 +17,37 @@ func (p *pool) executeJob(workerID int, job jobWrapper) {
 	duration := time.Since(start)
 	status := statusOf(err)
 
-	p.metrics.recordJobDone(job.kind, status, start.Sub(job.SubmittedAt), duration)
+	queueWait := start.Sub(job.SubmittedAt)
+
+	p.metrics.recordJobDone(job.kind, status, queueWait, duration)
 	if err != nil {
 		p.logFailure(workerID, job, status, duration, err)
 	}
+	if p.config.onTaskDone != nil {
+		p.notifyTaskDone(TaskResult{
+			ID:        job.taskID,
+			Kind:      job.kind,
+			QueueWait: queueWait,
+			Duration:  duration,
+			Attempts:  1,
+			Status:    status,
+			Err:       err,
+		})
+	}
+}
+
+// notifyTaskDone invokes the OnTaskDone hook, shielding the worker from panics
+func (p *pool) notifyTaskDone(res TaskResult) {
+	defer func() {
+		if r := recover(); r != nil {
+			p.logger.Error("OnTaskDone hook panicked",
+				slog.String("task_id", res.ID),
+				slog.Any("panic", r),
+				slog.String("stack", string(debug.Stack())),
+			)
+		}
+	}()
+	p.config.onTaskDone(res)
 }
 
 // runJob executes the job, converting a panic into a *PanicError

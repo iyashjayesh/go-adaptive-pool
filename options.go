@@ -20,6 +20,7 @@ type Config struct {
 	name                  string
 	logger                *slog.Logger
 	registerer            prometheus.Registerer
+	onTaskDone            func(TaskResult)
 }
 
 // Option is a functional option for configuring the pool
@@ -97,6 +98,18 @@ func WithName(name string) Option {
 func WithPrometheusRegisterer(reg prometheus.Registerer) Option {
 	return func(c *Config) {
 		c.registerer = reg
+	}
+}
+
+// WithOnTaskDone sets a hook called exactly once per executed task, whatever
+// the outcome. It lets application code react to results (dead-letter queues,
+// status updates, tracing) since Submit returns before the task runs.
+//
+// The hook runs synchronously on the worker goroutine, so keep it fast and
+// hand off heavy work. A panic in the hook is recovered and logged.
+func WithOnTaskDone(fn func(TaskResult)) Option {
+	return func(c *Config) {
+		c.onTaskDone = fn
 	}
 }
 

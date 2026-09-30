@@ -42,8 +42,8 @@ func (r *logRecorder) Write(b []byte) (int, error) {
 	return r.buf.Write(b)
 }
 
-func (r *logRecorder) logger(level slog.Level) *slog.Logger {
-	return slog.New(slog.NewJSONHandler(r, &slog.HandlerOptions{Level: level}))
+func (r *logRecorder) logger() *slog.Logger {
+	return slog.New(slog.NewJSONHandler(r, &slog.HandlerOptions{Level: slog.LevelDebug}))
 }
 
 // records returns all captured records with the given message.

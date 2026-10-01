@@ -3,10 +3,15 @@ package adaptivepool
 import (
 	"context"
 	"fmt"
+	"math"
 	"time"
 )
 
-const defaultRetryDelay = 100 * time.Millisecond
+const (
+	defaultRetryDelay = 100 * time.Millisecond
+	defaultMultiplier = 1.5
+	maxDuration       = time.Duration(math.MaxInt64)
+)
 
 // RetryPolicy configures how failed jobs are retried. Retries run inline on
 // the worker that executed the job: no re-queueing and no extra goroutines.
@@ -19,7 +24,7 @@ type RetryPolicy struct {
 	MaxAttempts int
 
 	// Backoff computes the wait before each retry.
-	// Default: ConstantBackoff{Delay: 100ms}
+	// Default: ExponentialBackoff{Base: 100ms}
 	Backoff Backoff
 
 	// Clock is the time source used for backoff waits. Override it in tests.
@@ -42,6 +47,55 @@ type ConstantBackoff struct {
 // Next implements Backoff
 func (b ConstantBackoff) Next(int) time.Duration {
 	return b.Delay
+}
+
+// LinearBackoff waits Base * retry: Base, 2*Base, 3*Base, ...
+type LinearBackoff struct {
+	Base time.Duration
+}
+
+// Next implements Backoff
+func (b LinearBackoff) Next(retry int) time.Duration {
+	if b.Base > 0 && time.Duration(retry) > maxDuration/b.Base {
+		return maxDuration
+	}
+	return b.Base * time.Duration(retry)
+}
+
+// ExponentialBackoff waits Base * Multiplier^(retry-1).
+// A zero Multiplier defaults to 1.5.
+type ExponentialBackoff struct {
+	Base       time.Duration
+	Multiplier float64
+}
+
+// Next implements Backoff
+func (b ExponentialBackoff) Next(retry int) time.Duration {
+	m := b.Multiplier
+	if m == 0 {
+		m = defaultMultiplier
+	}
+	d := float64(b.Base) * math.Pow(m, float64(retry-1))
+	if d >= float64(maxDuration) {
+		return maxDuration
+	}
+	return time.Duration(d)
+}
+
+func (b ConstantBackoff) validate() error { return nonNegative("ConstantBackoff.Delay", b.Delay) }
+func (b LinearBackoff) validate() error   { return nonNegative("LinearBackoff.Base", b.Base) }
+func (b ExponentialBackoff) validate() error {
+	if b.Multiplier != 0 && b.Multiplier < 1 {
+		return fmt.Errorf("%w: ExponentialBackoff.Multiplier must be >= 1", ErrInvalidConfig)
+	}
+	return nonNegative("ExponentialBackoff.Base", b.Base)
+}
+
+func nonNegative(field string, d time.Duration) error {
+	if d < 0 {
+		return fmt.Errorf("%w: %s must not be negative", ErrInvalidConfig, field)
+	}
+	return nil
 }
 
 // Clock abstracts time so retry timing can be tested deterministically.
@@ -67,6 +121,9 @@ func (rp *RetryPolicy) validate() error {
 	if rp.MaxAttempts < 1 {
 		return fmt.Errorf("%w: retry MaxAttempts must be >= 1", ErrInvalidConfig)
 	}
+	if v, ok := rp.Backoff.(interface{ validate() error }); ok {
+		return v.validate()
+	}
 	return nil
 }
 
@@ -77,7 +134,7 @@ type retrier struct {
 
 func newRetrier(policy RetryPolicy) *retrier {
 	if policy.Backoff == nil {
-		policy.Backoff = ConstantBackoff{Delay: defaultRetryDelay}
+		policy.Backoff = ExponentialBackoff{Base: defaultRetryDelay}
 	}
 	if policy.Clock == nil {
 		policy.Clock = systemClock{}

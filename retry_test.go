@@ -87,8 +87,7 @@ func TestRetryExhausted(t *testing.T) {
 	var re *RetryError
 	require.ErrorAs(t, err, &re)
 	assert.Equal(t, 3, re.Attempts)
-	assert.Len(t, clock.Waits(), 2, "no wait after the final attempt")
-	assert.Equal(t, defaultRetryDelay, clock.Waits()[0])
+	assert.Equal(t, []time.Duration{100 * time.Millisecond, 150 * time.Millisecond}, clock.Waits(), "default exponential backoff")
 }
 
 func TestRetrySingleAttempt(t *testing.T) {

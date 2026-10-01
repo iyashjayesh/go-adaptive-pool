@@ -1,6 +1,7 @@
 package adaptivepool
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"runtime/debug"
@@ -13,7 +14,12 @@ func (p *pool) executeJob(workerID int, job jobWrapper) {
 	defer p.state.busyWorkers.Add(-1)
 
 	start := time.Now()
-	err := runJob(job)
+	attempts, err := 1, error(nil)
+	if p.retrier != nil {
+		attempts, err = p.retrier.run(job.ctx, job.job)
+	} else {
+		err = runJob(job.ctx, job.job)
+	}
 	duration := time.Since(start)
 	status := statusOf(err)
 
@@ -21,7 +27,7 @@ func (p *pool) executeJob(workerID int, job jobWrapper) {
 
 	p.metrics.recordJobDone(job.kind, status, queueWait, duration)
 	if err != nil {
-		p.logFailure(workerID, job, status, duration, err)
+		p.logFailure(workerID, job, status, attempts, duration, err)
 	}
 	if p.config.onTaskDone != nil {
 		p.notifyTaskDone(TaskResult{
@@ -29,7 +35,7 @@ func (p *pool) executeJob(workerID int, job jobWrapper) {
 			Kind:      job.kind,
 			QueueWait: queueWait,
 			Duration:  duration,
-			Attempts:  1,
+			Attempts:  attempts,
 			Status:    status,
 			Err:       err,
 		})
@@ -51,16 +57,16 @@ func (p *pool) notifyTaskDone(res TaskResult) {
 }
 
 // runJob executes the job, converting a panic into a *PanicError
-func runJob(job jobWrapper) (err error) {
+func runJob(ctx context.Context, job Job) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = &PanicError{Value: r, Stack: debug.Stack()}
 		}
 	}()
-	return job.job(job.ctx)
+	return job(ctx)
 }
 
-func (p *pool) logFailure(workerID int, job jobWrapper, status Status, duration time.Duration, err error) {
+func (p *pool) logFailure(workerID int, job jobWrapper, status Status, attempts int, duration time.Duration, err error) {
 	if !p.logger.Enabled(job.ctx, slog.LevelError) {
 		return
 	}
@@ -69,6 +75,7 @@ func (p *pool) logFailure(workerID int, job jobWrapper, status Status, duration 
 		slog.String("task_id", job.taskID),
 		slog.String("kind", job.kind),
 		slog.String("status", string(status)),
+		slog.Int("attempts", attempts),
 		slog.Duration("duration", duration),
 		slog.Any("err", err),
 	}

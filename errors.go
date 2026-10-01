@@ -18,6 +18,9 @@ var (
 	// ErrNilJob is returned when submitting a nil job
 	ErrNilJob = errors.New("job is nil")
 
+	// ErrRetriesExhausted is the RetryError reason when a job used all its attempts
+	ErrRetriesExhausted = errors.New("retries exhausted")
+
 	// ErrInvalidConfig is returned when pool configuration is invalid
 	ErrInvalidConfig = errors.New("invalid pool configuration")
 )
@@ -31,4 +34,25 @@ type PanicError struct {
 
 func (e *PanicError) Error() string {
 	return fmt.Sprintf("job panicked: %v", e.Value)
+}
+
+// RetryError is the final error of a job that was retried and gave up.
+// errors.Is matches both the stop Reason (e.g. ErrRetriesExhausted or
+// context.Canceled) and the job's last error.
+type RetryError struct {
+	// Reason explains why retrying stopped
+	Reason error
+	// Attempts is the number of times the job ran
+	Attempts int
+	// Err is the error returned by the last attempt
+	Err error
+}
+
+func (e *RetryError) Error() string {
+	return fmt.Sprintf("%v after %d attempt(s): %v", e.Reason, e.Attempts, e.Err)
+}
+
+// Unwrap returns the stop reason and the last attempt's error
+func (e *RetryError) Unwrap() []error {
+	return []error{e.Reason, e.Err}
 }

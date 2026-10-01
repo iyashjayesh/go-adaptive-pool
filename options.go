@@ -21,6 +21,7 @@ type Config struct {
 	logger                *slog.Logger
 	registerer            prometheus.Registerer
 	onTaskDone            func(TaskResult)
+	retry                 *RetryPolicy
 }
 
 // Option is a functional option for configuring the pool
@@ -153,6 +154,9 @@ func (c *Config) validate() error {
 	}
 	if c.scaleCooldown < 0 {
 		return ErrInvalidConfig
+	}
+	if c.retry != nil {
+		return c.retry.validate()
 	}
 	return nil
 }

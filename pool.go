@@ -32,6 +32,7 @@ type pool struct {
 	state   *poolState
 	metrics *metrics
 	logger  *slog.Logger
+	retrier *retrier // nil when retries are disabled
 
 	// Dispatcher coordination
 	dispatcherWg     sync.WaitGroup
@@ -72,6 +73,10 @@ func New(options ...Option) (Pool, error) {
 		logger:           newLogger(config),
 		dispatcherCtx:    dispatcherCtx,
 		dispatcherCancel: dispatcherCancel,
+	}
+
+	if config.retry != nil {
+		p.retrier = newRetrier(*config.retry)
 	}
 
 	// Start the dispatcher

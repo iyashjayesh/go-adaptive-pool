@@ -1,6 +1,7 @@
 package adaptivepool
 
 import (
+	"context"
 	"errors"
 	"time"
 )
@@ -47,6 +48,10 @@ const (
 	StatusError Status = "error"
 	// StatusPanic means the job panicked; the error is a *PanicError
 	StatusPanic Status = "panic"
+	// StatusRetriesExhausted means the job failed on every allowed attempt
+	StatusRetriesExhausted Status = "retries_exhausted"
+	// StatusCanceled means the job's context was done before it succeeded
+	StatusCanceled Status = "canceled"
 )
 
 // statusOf classifies the final error of a task
@@ -57,6 +62,15 @@ func statusOf(err error) Status {
 	var pe *PanicError
 	if errors.As(err, &pe) {
 		return StatusPanic
+	}
+	var re *RetryError
+	if errors.As(err, &re) {
+		switch {
+		case re.Reason == ErrRetriesExhausted:
+			return StatusRetriesExhausted
+		case errors.Is(re.Reason, context.Canceled), errors.Is(re.Reason, context.DeadlineExceeded):
+			return StatusCanceled
+		}
 	}
 	return StatusError
 }

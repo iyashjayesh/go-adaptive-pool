@@ -160,3 +160,43 @@ func TestPoolRetriesJobs(t *testing.T) {
 		t.Fatal("task did not finish")
 	}
 }
+
+func TestRetryMaxDelayCapsBackoff(t *testing.T) {
+	clock := newFakeClock()
+	r := newRetrier(RetryPolicy{
+		MaxAttempts: 5,
+		Backoff:     ExponentialBackoff{Base: time.Second, Multiplier: 2},
+		MaxDelay:    3 * time.Second,
+		Clock:       clock,
+	})
+
+	_, _ = r.run(context.Background(), func(context.Context) error { return errTransient })
+	assert.Equal(t, []time.Duration{time.Second, 2 * time.Second, 3 * time.Second, 3 * time.Second}, clock.Waits())
+}
+
+func TestRetryFullJitter(t *testing.T) {
+	clock := newFakeClock()
+	r := newRetrier(RetryPolicy{
+		MaxAttempts: 200,
+		Backoff:     ConstantBackoff{Delay: time.Second},
+		MaxDelay:    500 * time.Millisecond,
+		Jitter:      true,
+		Clock:       clock,
+	})
+
+	_, _ = r.run(context.Background(), func(context.Context) error { return errTransient })
+
+	waits := clock.Waits()
+	distinct := map[time.Duration]bool{}
+	for _, w := range waits {
+		distinct[w] = true
+		assert.GreaterOrEqual(t, w, time.Duration(0))
+		assert.Less(t, w, 500*time.Millisecond, "jitter applies after MaxDelay")
+	}
+	assert.Greater(t, len(distinct), 1, "waits should be randomized")
+}
+
+func TestRetryNegativeMaxDelayInvalid(t *testing.T) {
+	_, err := New(WithRetry(RetryPolicy{MaxAttempts: 2, MaxDelay: -time.Second}))
+	assert.ErrorIs(t, err, ErrInvalidConfig)
+}

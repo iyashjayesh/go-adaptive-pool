@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"math/rand/v2"
 	"time"
 )
 
@@ -26,6 +27,15 @@ type RetryPolicy struct {
 	// Backoff computes the wait before each retry.
 	// Default: ExponentialBackoff{Base: 100ms}
 	Backoff Backoff
+
+	// MaxDelay caps any single backoff wait. Zero means no cap.
+	MaxDelay time.Duration
+
+	// Jitter enables full jitter: each wait is drawn uniformly from
+	// [0, delay), where delay is the backoff value after MaxDelay is applied.
+	// It spreads out retries of jobs that failed together, avoiding a
+	// thundering herd on the downstream system.
+	Jitter bool
 
 	// Clock is the time source used for backoff waits. Override it in tests.
 	// Default: the system clock
@@ -121,6 +131,9 @@ func (rp *RetryPolicy) validate() error {
 	if rp.MaxAttempts < 1 {
 		return fmt.Errorf("%w: retry MaxAttempts must be >= 1", ErrInvalidConfig)
 	}
+	if err := nonNegative("retry MaxDelay", rp.MaxDelay); err != nil {
+		return err
+	}
 	if v, ok := rp.Backoff.(interface{ validate() error }); ok {
 		return v.validate()
 	}
@@ -156,7 +169,7 @@ func (r *retrier) run(ctx context.Context, job Job) (int, error) {
 		if reason := r.stopReason(ctx, attempt); reason != nil {
 			return attempt, &RetryError{Reason: reason, Attempts: attempt, Err: err}
 		}
-		if waitErr := r.wait(ctx, r.policy.Backoff.Next(attempt)); waitErr != nil {
+		if waitErr := r.wait(ctx, r.delay(attempt)); waitErr != nil {
 			return attempt, &RetryError{Reason: waitErr, Attempts: attempt, Err: err}
 		}
 	}
@@ -171,6 +184,18 @@ func (r *retrier) stopReason(ctx context.Context, attempt int) error {
 		return ErrRetriesExhausted
 	}
 	return nil
+}
+
+// delay computes the wait before the given retry
+func (r *retrier) delay(retry int) time.Duration {
+	d := r.policy.Backoff.Next(retry)
+	if r.policy.MaxDelay > 0 {
+		d = min(d, r.policy.MaxDelay)
+	}
+	if r.policy.Jitter && d > 0 {
+		d = rand.N(d)
+	}
+	return d
 }
 
 // wait blocks for d, returning early with the context's error if it is done

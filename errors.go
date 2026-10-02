@@ -21,6 +21,9 @@ var (
 	// ErrRetriesExhausted is the RetryError reason when a job used all its attempts
 	ErrRetriesExhausted = errors.New("retries exhausted")
 
+	// ErrRetryBudgetExceeded is the RetryError reason when the next retry would exceed MaxElapsedTime
+	ErrRetryBudgetExceeded = errors.New("retry time budget exceeded")
+
 	// ErrInvalidConfig is returned when pool configuration is invalid
 	ErrInvalidConfig = errors.New("invalid pool configuration")
 )

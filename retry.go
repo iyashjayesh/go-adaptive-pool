@@ -37,6 +37,12 @@ type RetryPolicy struct {
 	// thundering herd on the downstream system.
 	Jitter bool
 
+	// MaxElapsedTime bounds the total time spent on a job across all
+	// attempts and waits. Retrying stops early if the next wait would exceed
+	// it; an attempt already running is never interrupted. Zero means no
+	// budget. Applies in addition to MaxAttempts.
+	MaxElapsedTime time.Duration
+
 	// Clock is the time source used for backoff waits. Override it in tests.
 	// Default: the system clock
 	Clock Clock
@@ -134,6 +140,9 @@ func (rp *RetryPolicy) validate() error {
 	if err := nonNegative("retry MaxDelay", rp.MaxDelay); err != nil {
 		return err
 	}
+	if err := nonNegative("retry MaxElapsedTime", rp.MaxElapsedTime); err != nil {
+		return err
+	}
 	if v, ok := rp.Backoff.(interface{ validate() error }); ok {
 		return v.validate()
 	}
@@ -158,6 +167,11 @@ func newRetrier(policy RetryPolicy) *retrier {
 // run executes job until it succeeds or the policy says to stop. It returns
 // the number of attempts made and the final error.
 func (r *retrier) run(ctx context.Context, job Job) (int, error) {
+	var start time.Time
+	if r.policy.MaxElapsedTime > 0 {
+		start = r.policy.Clock.Now()
+	}
+
 	for attempt := 1; ; attempt++ {
 		err := runJob(ctx, job)
 		if err == nil {
@@ -169,7 +183,11 @@ func (r *retrier) run(ctx context.Context, job Job) (int, error) {
 		if reason := r.stopReason(ctx, attempt); reason != nil {
 			return attempt, &RetryError{Reason: reason, Attempts: attempt, Err: err}
 		}
-		if waitErr := r.wait(ctx, r.delay(attempt)); waitErr != nil {
+		delay := r.delay(attempt)
+		if r.policy.MaxElapsedTime > 0 && delay > r.policy.MaxElapsedTime-r.policy.Clock.Now().Sub(start) {
+			return attempt, &RetryError{Reason: ErrRetryBudgetExceeded, Attempts: attempt, Err: err}
+		}
+		if waitErr := r.wait(ctx, delay); waitErr != nil {
 			return attempt, &RetryError{Reason: waitErr, Attempts: attempt, Err: err}
 		}
 	}

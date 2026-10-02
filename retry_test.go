@@ -38,6 +38,12 @@ func (c *fakeClock) After(d time.Duration) <-chan time.Time {
 	return ch
 }
 
+func (c *fakeClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(d)
+}
+
 func (c *fakeClock) Waits() []time.Duration {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -199,4 +205,56 @@ func TestRetryFullJitter(t *testing.T) {
 func TestRetryNegativeMaxDelayInvalid(t *testing.T) {
 	_, err := New(WithRetry(RetryPolicy{MaxAttempts: 2, MaxDelay: -time.Second}))
 	assert.ErrorIs(t, err, ErrInvalidConfig)
+}
+
+func TestRetryMaxElapsedTime(t *testing.T) {
+	clock := newFakeClock()
+	r := newRetrier(RetryPolicy{
+		MaxAttempts:    100,
+		Backoff:        ConstantBackoff{Delay: 3 * time.Second},
+		MaxElapsedTime: 10 * time.Second,
+		Clock:          clock,
+	})
+
+	attempts, err := r.run(context.Background(), func(context.Context) error { return errTransient })
+
+	// waits at 0s, 3s, 6s; a 4th wait would end at 12s > 10s
+	assert.Equal(t, 4, attempts)
+	assert.Len(t, clock.Waits(), 3)
+	assert.ErrorIs(t, err, ErrRetryBudgetExceeded)
+	assert.ErrorIs(t, err, errTransient)
+	assert.Equal(t, StatusBudgetExceeded, statusOf(err))
+}
+
+func TestRetryMaxElapsedTimeCountsAttemptDuration(t *testing.T) {
+	clock := newFakeClock()
+	r := newRetrier(RetryPolicy{
+		MaxAttempts:    100,
+		Backoff:        ConstantBackoff{Delay: time.Second},
+		MaxElapsedTime: 10 * time.Second,
+		Clock:          clock,
+	})
+
+	attempts, err := r.run(context.Background(), func(context.Context) error {
+		clock.Advance(4 * time.Second)
+		return errTransient
+	})
+
+	// 4s run, 1s wait, 4s run = 9s; another 1s wait fits (10s) but the
+	// attempt after it overruns, so the next wait check fails at 14s
+	assert.Equal(t, 3, attempts)
+	assert.ErrorIs(t, err, ErrRetryBudgetExceeded)
+}
+
+func TestRetryMaxElapsedTimeHugeDelayDoesNotOverflow(t *testing.T) {
+	r := newRetrier(RetryPolicy{
+		MaxAttempts:    5,
+		Backoff:        ExponentialBackoff{Base: time.Hour, Multiplier: 1e9},
+		MaxElapsedTime: time.Minute,
+		Clock:          newFakeClock(),
+	})
+
+	attempts, err := r.run(context.Background(), func(context.Context) error { return errTransient })
+	assert.Equal(t, 1, attempts)
+	assert.ErrorIs(t, err, ErrRetryBudgetExceeded)
 }

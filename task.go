@@ -50,6 +50,8 @@ const (
 	StatusPanic Status = "panic"
 	// StatusRetriesExhausted means the job failed on every allowed attempt
 	StatusRetriesExhausted Status = "retries_exhausted"
+	// StatusBudgetExceeded means retrying stopped because of MaxElapsedTime
+	StatusBudgetExceeded Status = "budget_exceeded"
 	// StatusCanceled means the job's context was done before it succeeded
 	StatusCanceled Status = "canceled"
 )
@@ -68,6 +70,8 @@ func statusOf(err error) Status {
 		switch {
 		case re.Reason == ErrRetriesExhausted:
 			return StatusRetriesExhausted
+		case re.Reason == ErrRetryBudgetExceeded:
+			return StatusBudgetExceeded
 		case errors.Is(re.Reason, context.Canceled), errors.Is(re.Reason, context.DeadlineExceeded):
 			return StatusCanceled
 		}

@@ -280,3 +280,38 @@ func TestRetryStopsOnPermanent(t *testing.T) {
 func TestPermanentNil(t *testing.T) {
 	assert.NoError(t, Permanent(nil))
 }
+
+func TestRetryAfterOverridesBackoff(t *testing.T) {
+	clock := newFakeClock()
+	r := newRetrier(RetryPolicy{
+		MaxAttempts: 4,
+		Backoff:     ConstantBackoff{Delay: time.Second},
+		MaxDelay:    10 * time.Second,
+		Jitter:      true,
+		Clock:       clock,
+	})
+	errRateLimited := errors.New("429")
+
+	calls := 0
+	_, err := r.run(context.Background(), func(context.Context) error {
+		calls++
+		switch calls {
+		case 1:
+			return RetryAfter(errRateLimited, 7*time.Second)
+		case 2:
+			return RetryAfter(errRateLimited, time.Minute)
+		}
+		return nil
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, []time.Duration{7 * time.Second, 10 * time.Second}, clock.Waits(), "hint is exact, not jittered, and capped by MaxDelay")
+}
+
+func TestRetryAfterKeepsError(t *testing.T) {
+	errRateLimited := errors.New("429")
+	err := RetryAfter(errRateLimited, time.Second)
+	assert.ErrorIs(t, err, errRateLimited)
+	assert.Equal(t, "429", err.Error())
+	assert.NoError(t, RetryAfter(nil, time.Second))
+}

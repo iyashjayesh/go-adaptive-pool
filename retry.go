@@ -29,7 +29,8 @@ type RetryPolicy struct {
 	// Default: ExponentialBackoff{Base: 100ms}
 	Backoff Backoff
 
-	// MaxDelay caps any single backoff wait. Zero means no cap.
+	// MaxDelay caps any single wait, including RetryAfter hints, so a job
+	// cannot hold a worker for an unbounded time. Zero means no cap.
 	MaxDelay time.Duration
 
 	// Jitter enables full jitter: each wait is drawn uniformly from
@@ -184,7 +185,7 @@ func (r *retrier) run(ctx context.Context, job Job) (int, error) {
 		if reason := r.stopReason(ctx, attempt, err); reason != nil {
 			return attempt, &RetryError{Reason: reason, Attempts: attempt, Err: err}
 		}
-		delay := r.delay(attempt)
+		delay := r.delay(attempt, err)
 		if r.policy.MaxElapsedTime > 0 && delay > r.policy.MaxElapsedTime-r.policy.Clock.Now().Sub(start) {
 			return attempt, &RetryError{Reason: ErrRetryBudgetExceeded, Attempts: attempt, Err: err}
 		}
@@ -208,14 +209,23 @@ func (r *retrier) stopReason(ctx context.Context, attempt int, err error) error 
 	return nil
 }
 
-// delay computes the wait before the given retry
-func (r *retrier) delay(retry int) time.Duration {
-	d := r.policy.Backoff.Next(retry)
-	if r.policy.MaxDelay > 0 {
-		d = min(d, r.policy.MaxDelay)
+// delay computes the wait before the given retry. A RetryAfter hint on err
+// replaces the backoff value and is not jittered; MaxDelay caps both.
+func (r *retrier) delay(retry int, err error) time.Duration {
+	var hint *retryAfterError
+	if errors.As(err, &hint) {
+		return r.capDelay(hint.delay)
 	}
+	d := r.capDelay(r.policy.Backoff.Next(retry))
 	if r.policy.Jitter && d > 0 {
 		d = rand.N(d)
+	}
+	return d
+}
+
+func (r *retrier) capDelay(d time.Duration) time.Duration {
+	if r.policy.MaxDelay > 0 {
+		return min(d, r.policy.MaxDelay)
 	}
 	return d
 }

@@ -3,6 +3,7 @@ package adaptivepool
 import (
 	"errors"
 	"fmt"
+	"time"
 )
 
 var (
@@ -79,3 +80,22 @@ type permanentError struct {
 
 func (e *permanentError) Error() string { return e.err.Error() }
 func (e *permanentError) Unwrap() error { return e.err }
+
+// RetryAfter asks the retry engine to wait exactly d before the next attempt
+// instead of the backoff delay, e.g. to honor a rate limiter's Retry-After
+// hint. The wait is still capped by RetryPolicy.MaxDelay and is not
+// jittered. RetryAfter(nil, d) returns nil.
+func RetryAfter(err error, d time.Duration) error {
+	if err == nil {
+		return nil
+	}
+	return &retryAfterError{err: err, delay: max(d, 0)}
+}
+
+type retryAfterError struct {
+	err   error
+	delay time.Duration
+}
+
+func (e *retryAfterError) Error() string { return e.err.Error() }
+func (e *retryAfterError) Unwrap() error { return e.err }

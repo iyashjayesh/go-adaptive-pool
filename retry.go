@@ -2,6 +2,7 @@ package adaptivepool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"math/rand/v2"
@@ -17,8 +18,8 @@ const (
 // RetryPolicy configures how failed jobs are retried. Retries run inline on
 // the worker that executed the job: no re-queueing and no extra goroutines.
 //
-// Every error is retried unless the job's context is done. Panics are never
-// retried. When retrying stops, the job's final error is a *RetryError.
+// Every error is retried unless it is wrapped with Permanent or the job's
+// context is done. Panics are never retried. When retrying stops, the job's final error is a *RetryError.
 type RetryPolicy struct {
 	// MaxAttempts is the maximum number of times a job runs, including the
 	// first attempt. Required and must be >= 1.
@@ -180,7 +181,7 @@ func (r *retrier) run(ctx context.Context, job Job) (int, error) {
 		if _, panicked := err.(*PanicError); panicked {
 			return attempt, err
 		}
-		if reason := r.stopReason(ctx, attempt); reason != nil {
+		if reason := r.stopReason(ctx, attempt, err); reason != nil {
 			return attempt, &RetryError{Reason: reason, Attempts: attempt, Err: err}
 		}
 		delay := r.delay(attempt)
@@ -194,8 +195,11 @@ func (r *retrier) run(ctx context.Context, job Job) (int, error) {
 }
 
 // stopReason returns why retrying must stop after a failed attempt, or nil to retry
-func (r *retrier) stopReason(ctx context.Context, attempt int) error {
+func (r *retrier) stopReason(ctx context.Context, attempt int, err error) error {
+	var perm *permanentError
 	switch {
+	case errors.As(err, &perm):
+		return ErrPermanentFailure
 	case ctx.Err() != nil:
 		return ctx.Err()
 	case attempt >= r.policy.MaxAttempts:

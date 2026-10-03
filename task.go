@@ -52,6 +52,8 @@ const (
 	StatusRetriesExhausted Status = "retries_exhausted"
 	// StatusBudgetExceeded means retrying stopped because of MaxElapsedTime
 	StatusBudgetExceeded Status = "budget_exceeded"
+	// StatusPermanent means the job returned an error wrapped with Permanent
+	StatusPermanent Status = "permanent"
 	// StatusCanceled means the job's context was done before it succeeded
 	StatusCanceled Status = "canceled"
 )
@@ -72,6 +74,8 @@ func statusOf(err error) Status {
 			return StatusRetriesExhausted
 		case re.Reason == ErrRetryBudgetExceeded:
 			return StatusBudgetExceeded
+		case re.Reason == ErrPermanentFailure:
+			return StatusPermanent
 		case errors.Is(re.Reason, context.Canceled), errors.Is(re.Reason, context.DeadlineExceeded):
 			return StatusCanceled
 		}

@@ -24,6 +24,9 @@ var (
 	// ErrRetryBudgetExceeded is the RetryError reason when the next retry would exceed MaxElapsedTime
 	ErrRetryBudgetExceeded = errors.New("retry time budget exceeded")
 
+	// ErrPermanentFailure is the RetryError reason when a job returned an error wrapped with Permanent
+	ErrPermanentFailure = errors.New("permanent failure")
+
 	// ErrInvalidConfig is returned when pool configuration is invalid
 	ErrInvalidConfig = errors.New("invalid pool configuration")
 )
@@ -59,3 +62,20 @@ func (e *RetryError) Error() string {
 func (e *RetryError) Unwrap() []error {
 	return []error{e.Reason, e.Err}
 }
+
+// Permanent marks err as not retryable: the retry engine stops immediately.
+// Use it for failures that cannot succeed on retry, such as invalid input.
+// Permanent(nil) returns nil.
+func Permanent(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &permanentError{err: err}
+}
+
+type permanentError struct {
+	err error
+}
+
+func (e *permanentError) Error() string { return e.err.Error() }
+func (e *permanentError) Unwrap() error { return e.err }

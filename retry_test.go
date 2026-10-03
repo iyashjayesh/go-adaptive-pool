@@ -3,6 +3,7 @@ package adaptivepool
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -257,4 +258,25 @@ func TestRetryMaxElapsedTimeHugeDelayDoesNotOverflow(t *testing.T) {
 	attempts, err := r.run(context.Background(), func(context.Context) error { return errTransient })
 	assert.Equal(t, 1, attempts)
 	assert.ErrorIs(t, err, ErrRetryBudgetExceeded)
+}
+
+func TestRetryStopsOnPermanent(t *testing.T) {
+	clock := newFakeClock()
+	r := newRetrier(RetryPolicy{MaxAttempts: 5, Clock: clock})
+	errBadInput := errors.New("bad input")
+
+	attempts, err := r.run(context.Background(), func(context.Context) error {
+		return fmt.Errorf("validating: %w", Permanent(errBadInput))
+	})
+
+	assert.Equal(t, 1, attempts)
+	assert.Empty(t, clock.Waits())
+	assert.ErrorIs(t, err, ErrPermanentFailure)
+	assert.ErrorIs(t, err, errBadInput)
+	assert.Equal(t, StatusPermanent, statusOf(err))
+	assert.Equal(t, "permanent failure after 1 attempt(s): validating: bad input", err.Error())
+}
+
+func TestPermanentNil(t *testing.T) {
+	assert.NoError(t, Permanent(nil))
 }

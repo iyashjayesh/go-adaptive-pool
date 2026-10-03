@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand/v2"
+	"slices"
 	"time"
 )
 
@@ -45,9 +46,20 @@ type RetryPolicy struct {
 	// budget. Applies in addition to MaxAttempts.
 	MaxElapsedTime time.Duration
 
+	// ErrorLimits caps attempts for specific errors. Failures are matched
+	// with errors.Is against each limit in order; the first match counts.
+	// MaxAttempts still applies to the job as a whole.
+	ErrorLimits []ErrorLimit
+
 	// Clock is the time source used for backoff waits. Override it in tests.
 	// Default: the system clock
 	Clock Clock
+}
+
+// ErrorLimit limits how many attempts may fail with errors matching Err.
+type ErrorLimit struct {
+	Err         error
+	MaxAttempts int
 }
 
 // Backoff computes the delay before a retry. retry starts at 1 for the
@@ -145,6 +157,11 @@ func (rp *RetryPolicy) validate() error {
 	if err := nonNegative("retry MaxElapsedTime", rp.MaxElapsedTime); err != nil {
 		return err
 	}
+	for _, l := range rp.ErrorLimits {
+		if l.Err == nil || l.MaxAttempts < 1 {
+			return fmt.Errorf("%w: ErrorLimit needs a non-nil Err and MaxAttempts >= 1", ErrInvalidConfig)
+		}
+	}
 	if v, ok := rp.Backoff.(interface{ validate() error }); ok {
 		return v.validate()
 	}
@@ -163,6 +180,7 @@ func newRetrier(policy RetryPolicy) *retrier {
 	if policy.Clock == nil {
 		policy.Clock = systemClock{}
 	}
+	policy.ErrorLimits = slices.Clone(policy.ErrorLimits)
 	return &retrier{policy: policy}
 }
 
@@ -174,6 +192,15 @@ func (r *retrier) run(ctx context.Context, job Job) (int, error) {
 		start = r.policy.Clock.Now()
 	}
 
+	// Per-error failure counts live on the stack for typical limit counts
+	var buf [8]int
+	var counts []int
+	if n := len(r.policy.ErrorLimits); n > len(buf) {
+		counts = make([]int, n)
+	} else {
+		counts = buf[:n]
+	}
+
 	for attempt := 1; ; attempt++ {
 		err := runJob(ctx, job)
 		if err == nil {
@@ -182,7 +209,7 @@ func (r *retrier) run(ctx context.Context, job Job) (int, error) {
 		if _, panicked := err.(*PanicError); panicked {
 			return attempt, err
 		}
-		if reason := r.stopReason(ctx, attempt, err); reason != nil {
+		if reason := r.stopReason(ctx, attempt, err, counts); reason != nil {
 			return attempt, &RetryError{Reason: reason, Attempts: attempt, Err: err}
 		}
 		delay := r.delay(attempt, err)
@@ -196,17 +223,29 @@ func (r *retrier) run(ctx context.Context, job Job) (int, error) {
 }
 
 // stopReason returns why retrying must stop after a failed attempt, or nil to retry
-func (r *retrier) stopReason(ctx context.Context, attempt int, err error) error {
+func (r *retrier) stopReason(ctx context.Context, attempt int, err error, counts []int) error {
 	var perm *permanentError
 	switch {
 	case errors.As(err, &perm):
 		return ErrPermanentFailure
 	case ctx.Err() != nil:
 		return ctx.Err()
-	case attempt >= r.policy.MaxAttempts:
+	case attempt >= r.policy.MaxAttempts, r.errorLimitReached(err, counts):
 		return ErrRetriesExhausted
 	}
 	return nil
+}
+
+// errorLimitReached counts err against the first matching ErrorLimit and
+// reports whether that limit is now used up
+func (r *retrier) errorLimitReached(err error, counts []int) bool {
+	for i, l := range r.policy.ErrorLimits {
+		if errors.Is(err, l.Err) {
+			counts[i]++
+			return counts[i] >= l.MaxAttempts
+		}
+	}
+	return false
 }
 
 // delay computes the wait before the given retry. A RetryAfter hint on err

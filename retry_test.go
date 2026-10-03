@@ -315,3 +315,60 @@ func TestRetryAfterKeepsError(t *testing.T) {
 	assert.Equal(t, "429", err.Error())
 	assert.NoError(t, RetryAfter(nil, time.Second))
 }
+
+func TestRetryErrorLimits(t *testing.T) {
+	errRateLimited := errors.New("rate limited")
+	errTimeout := errors.New("timeout")
+
+	tests := []struct {
+		name         string
+		errs         []error // error returned by each attempt; nil = success
+		wantAttempts int
+		wantErr      error
+	}{
+		{"limited error stops early", []error{errTimeout, errTimeout, errTimeout}, 2, ErrRetriesExhausted},
+		{"wrapped errors match", []error{fmt.Errorf("op: %w", errTimeout), errTimeout}, 2, ErrRetriesExhausted},
+		{"counts per error", []error{errTimeout, errRateLimited, errRateLimited, errRateLimited, nil}, 5, nil},
+		{"MaxAttempts still applies", []error{errRateLimited, errTransient, errRateLimited, errTransient, errRateLimited, errTransient}, 6, ErrRetriesExhausted},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newRetrier(RetryPolicy{
+				MaxAttempts: 6,
+				ErrorLimits: []ErrorLimit{{Err: errTimeout, MaxAttempts: 2}, {Err: errRateLimited, MaxAttempts: 5}},
+				Clock:       newFakeClock(),
+			})
+			calls := 0
+			attempts, err := r.run(context.Background(), func(context.Context) error {
+				err := tt.errs[calls]
+				calls++
+				return err
+			})
+			assert.Equal(t, tt.wantAttempts, attempts)
+			if tt.wantErr == nil {
+				assert.NoError(t, err)
+			} else {
+				assert.ErrorIs(t, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestRetryErrorLimitsBeyondStackBuffer(t *testing.T) {
+	limits := make([]ErrorLimit, 10)
+	for i := range limits {
+		limits[i] = ErrorLimit{Err: fmt.Errorf("err %d", i), MaxAttempts: 3}
+	}
+	r := newRetrier(RetryPolicy{MaxAttempts: 10, ErrorLimits: limits, Clock: newFakeClock()})
+
+	attempts, err := r.run(context.Background(), func(context.Context) error { return limits[9].Err })
+	assert.Equal(t, 3, attempts)
+	assert.ErrorIs(t, err, ErrRetriesExhausted)
+}
+
+func TestRetryErrorLimitsValidation(t *testing.T) {
+	for _, l := range []ErrorLimit{{Err: nil, MaxAttempts: 1}, {Err: errTransient, MaxAttempts: 0}} {
+		_, err := New(WithRetry(RetryPolicy{MaxAttempts: 2, ErrorLimits: []ErrorLimit{l}}))
+		assert.ErrorIs(t, err, ErrInvalidConfig)
+	}
+}

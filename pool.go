@@ -76,7 +76,7 @@ func New(options ...Option) (Pool, error) {
 	}
 
 	if config.retry != nil {
-		p.retrier = newRetrier(*config.retry, p.logger)
+		p.retrier = newRetrier(*config.retry, p.logger, state.forceStop)
 	}
 
 	// Start the dispatcher
@@ -147,6 +147,9 @@ func (p *pool) runWorker(id int) {
 		select {
 		case <-p.state.workerShutdown:
 			// Shutdown signal received
+			return
+
+		case <-p.state.forceStop:
 			return
 
 		case job, ok := <-p.state.jobQueue:

@@ -44,6 +44,7 @@ type poolState struct {
 	shutdownOnce  sync.Once
 	shutdownState atomic.Int32
 	shutdownDone  chan struct{}
+	forceStop     chan struct{} // closed when Shutdown's context expires
 
 	// Scaling coordination
 	scalingMu   sync.Mutex
@@ -59,6 +60,7 @@ func newPoolState(queueSize int) *poolState {
 		jobQueue:       make(chan jobWrapper, queueSize),
 		workerShutdown: make(chan struct{}),
 		shutdownDone:   make(chan struct{}),
+		forceStop:      make(chan struct{}),
 	}
 	ps.shutdownState.Store(int32(shutdownStateRunning))
 	return ps

@@ -21,7 +21,9 @@ const (
 // the worker that executed the job: no re-queueing and no extra goroutines.
 //
 // Every error is retried unless it is wrapped with Permanent or the job's
-// context is done. Panics are never retried. When retrying stops, the job's final error is a *RetryError.
+// context is done. Panics are never retried. During a graceful Shutdown,
+// in-flight retries continue; once Shutdown's context expires, pending
+// backoff waits are aborted. When retrying stops, the job's final error is a *RetryError.
 type RetryPolicy struct {
 	// MaxAttempts is the maximum number of times a job runs, including the
 	// first attempt. Required and must be >= 1.
@@ -173,9 +175,10 @@ func (rp *RetryPolicy) validate() error {
 type retrier struct {
 	policy RetryPolicy
 	logger *slog.Logger
+	stop   <-chan struct{} // aborts backoff waits on forced shutdown
 }
 
-func newRetrier(policy RetryPolicy, logger *slog.Logger) *retrier {
+func newRetrier(policy RetryPolicy, logger *slog.Logger, stop <-chan struct{}) *retrier {
 	if policy.Backoff == nil {
 		policy.Backoff = ExponentialBackoff{Base: defaultRetryDelay}
 	}
@@ -186,7 +189,7 @@ func newRetrier(policy RetryPolicy, logger *slog.Logger) *retrier {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	return &retrier{policy: policy, logger: logger}
+	return &retrier{policy: policy, logger: logger, stop: stop}
 }
 
 // execute runs the job until it succeeds or the policy says to stop. It
@@ -289,7 +292,8 @@ func (r *retrier) capDelay(d time.Duration) time.Duration {
 	return d
 }
 
-// wait blocks for d, returning early with the context's error if it is done
+// wait blocks for d, returning early if the context is done or the pool is
+// force-stopped
 func (r *retrier) wait(ctx context.Context, d time.Duration) error {
 	if d <= 0 {
 		return ctx.Err()
@@ -297,6 +301,8 @@ func (r *retrier) wait(ctx context.Context, d time.Duration) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
+	case <-r.stop:
+		return ErrPoolShutdown
 	case <-r.policy.Clock.After(d):
 		return nil
 	}

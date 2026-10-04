@@ -68,13 +68,17 @@ func failN(n int, err error) (Job, *int) {
 
 var errTransient = errors.New("transient")
 
+func newTestRetrier(policy RetryPolicy) *retrier {
+	return newRetrier(policy, nil, nil)
+}
+
 func (r *retrier) run(ctx context.Context, job Job) (int, error) {
 	return r.execute(&jobWrapper{ctx: ctx, job: job})
 }
 
 func TestRetrySucceedsAfterFailures(t *testing.T) {
 	clock := newFakeClock()
-	r := newRetrier(RetryPolicy{MaxAttempts: 5, Backoff: ConstantBackoff{Delay: time.Second}, Clock: clock}, nil)
+	r := newTestRetrier(RetryPolicy{MaxAttempts: 5, Backoff: ConstantBackoff{Delay: time.Second}, Clock: clock})
 
 	job, calls := failN(2, errTransient)
 	attempts, err := r.run(context.Background(), job)
@@ -87,7 +91,7 @@ func TestRetrySucceedsAfterFailures(t *testing.T) {
 
 func TestRetryExhausted(t *testing.T) {
 	clock := newFakeClock()
-	r := newRetrier(RetryPolicy{MaxAttempts: 3, Clock: clock}, nil)
+	r := newTestRetrier(RetryPolicy{MaxAttempts: 3, Clock: clock})
 
 	job, calls := failN(10, errTransient)
 	attempts, err := r.run(context.Background(), job)
@@ -106,7 +110,7 @@ func TestRetryExhausted(t *testing.T) {
 
 func TestRetrySingleAttempt(t *testing.T) {
 	clock := newFakeClock()
-	r := newRetrier(RetryPolicy{MaxAttempts: 1, Clock: clock}, nil)
+	r := newTestRetrier(RetryPolicy{MaxAttempts: 1, Clock: clock})
 
 	attempts, err := r.run(context.Background(), func(context.Context) error { return errTransient })
 	assert.Equal(t, 1, attempts)
@@ -116,7 +120,7 @@ func TestRetrySingleAttempt(t *testing.T) {
 
 func TestRetryStopsWhenContextDone(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	r := newRetrier(RetryPolicy{MaxAttempts: 5, Clock: newFakeClock()}, nil)
+	r := newTestRetrier(RetryPolicy{MaxAttempts: 5, Clock: newFakeClock()})
 
 	attempts, err := r.run(ctx, func(context.Context) error {
 		cancel()
@@ -129,7 +133,7 @@ func TestRetryStopsWhenContextDone(t *testing.T) {
 
 func TestRetryWaitInterruptedByContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	r := newRetrier(RetryPolicy{MaxAttempts: 5, Backoff: ConstantBackoff{Delay: time.Hour}}, nil)
+	r := newTestRetrier(RetryPolicy{MaxAttempts: 5, Backoff: ConstantBackoff{Delay: time.Hour}})
 
 	time.AfterFunc(20*time.Millisecond, cancel)
 	start := time.Now()
@@ -142,7 +146,7 @@ func TestRetryWaitInterruptedByContext(t *testing.T) {
 }
 
 func TestRetryDoesNotRetryPanics(t *testing.T) {
-	r := newRetrier(RetryPolicy{MaxAttempts: 5, Clock: newFakeClock()}, nil)
+	r := newTestRetrier(RetryPolicy{MaxAttempts: 5, Clock: newFakeClock()})
 
 	attempts, err := r.run(context.Background(), func(context.Context) error { panic("bug") })
 	assert.Equal(t, 1, attempts)
@@ -177,12 +181,12 @@ func TestPoolRetriesJobs(t *testing.T) {
 
 func TestRetryMaxDelayCapsBackoff(t *testing.T) {
 	clock := newFakeClock()
-	r := newRetrier(RetryPolicy{
+	r := newTestRetrier(RetryPolicy{
 		MaxAttempts: 5,
 		Backoff:     ExponentialBackoff{Base: time.Second, Multiplier: 2},
 		MaxDelay:    3 * time.Second,
 		Clock:       clock,
-	}, nil)
+	})
 
 	_, _ = r.run(context.Background(), func(context.Context) error { return errTransient })
 	assert.Equal(t, []time.Duration{time.Second, 2 * time.Second, 3 * time.Second, 3 * time.Second}, clock.Waits())
@@ -190,13 +194,13 @@ func TestRetryMaxDelayCapsBackoff(t *testing.T) {
 
 func TestRetryFullJitter(t *testing.T) {
 	clock := newFakeClock()
-	r := newRetrier(RetryPolicy{
+	r := newTestRetrier(RetryPolicy{
 		MaxAttempts: 200,
 		Backoff:     ConstantBackoff{Delay: time.Second},
 		MaxDelay:    500 * time.Millisecond,
 		Jitter:      true,
 		Clock:       clock,
-	}, nil)
+	})
 
 	_, _ = r.run(context.Background(), func(context.Context) error { return errTransient })
 
@@ -217,12 +221,12 @@ func TestRetryNegativeMaxDelayInvalid(t *testing.T) {
 
 func TestRetryMaxElapsedTime(t *testing.T) {
 	clock := newFakeClock()
-	r := newRetrier(RetryPolicy{
+	r := newTestRetrier(RetryPolicy{
 		MaxAttempts:    100,
 		Backoff:        ConstantBackoff{Delay: 3 * time.Second},
 		MaxElapsedTime: 10 * time.Second,
 		Clock:          clock,
-	}, nil)
+	})
 
 	attempts, err := r.run(context.Background(), func(context.Context) error { return errTransient })
 
@@ -236,12 +240,12 @@ func TestRetryMaxElapsedTime(t *testing.T) {
 
 func TestRetryMaxElapsedTimeCountsAttemptDuration(t *testing.T) {
 	clock := newFakeClock()
-	r := newRetrier(RetryPolicy{
+	r := newTestRetrier(RetryPolicy{
 		MaxAttempts:    100,
 		Backoff:        ConstantBackoff{Delay: time.Second},
 		MaxElapsedTime: 10 * time.Second,
 		Clock:          clock,
-	}, nil)
+	})
 
 	attempts, err := r.run(context.Background(), func(context.Context) error {
 		clock.Advance(4 * time.Second)
@@ -255,12 +259,12 @@ func TestRetryMaxElapsedTimeCountsAttemptDuration(t *testing.T) {
 }
 
 func TestRetryMaxElapsedTimeHugeDelayDoesNotOverflow(t *testing.T) {
-	r := newRetrier(RetryPolicy{
+	r := newTestRetrier(RetryPolicy{
 		MaxAttempts:    5,
 		Backoff:        ExponentialBackoff{Base: time.Hour, Multiplier: 1e9},
 		MaxElapsedTime: time.Minute,
 		Clock:          newFakeClock(),
-	}, nil)
+	})
 
 	attempts, err := r.run(context.Background(), func(context.Context) error { return errTransient })
 	assert.Equal(t, 1, attempts)
@@ -269,7 +273,7 @@ func TestRetryMaxElapsedTimeHugeDelayDoesNotOverflow(t *testing.T) {
 
 func TestRetryStopsOnPermanent(t *testing.T) {
 	clock := newFakeClock()
-	r := newRetrier(RetryPolicy{MaxAttempts: 5, Clock: clock}, nil)
+	r := newTestRetrier(RetryPolicy{MaxAttempts: 5, Clock: clock})
 	errBadInput := errors.New("bad input")
 
 	attempts, err := r.run(context.Background(), func(context.Context) error {
@@ -290,13 +294,13 @@ func TestPermanentNil(t *testing.T) {
 
 func TestRetryAfterOverridesBackoff(t *testing.T) {
 	clock := newFakeClock()
-	r := newRetrier(RetryPolicy{
+	r := newTestRetrier(RetryPolicy{
 		MaxAttempts: 4,
 		Backoff:     ConstantBackoff{Delay: time.Second},
 		MaxDelay:    10 * time.Second,
 		Jitter:      true,
 		Clock:       clock,
-	}, nil)
+	})
 	errRateLimited := errors.New("429")
 
 	calls := 0
@@ -340,11 +344,11 @@ func TestRetryErrorLimits(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r := newRetrier(RetryPolicy{
+			r := newTestRetrier(RetryPolicy{
 				MaxAttempts: 6,
 				ErrorLimits: []ErrorLimit{{Err: errTimeout, MaxAttempts: 2}, {Err: errRateLimited, MaxAttempts: 5}},
 				Clock:       newFakeClock(),
-			}, nil)
+			})
 			calls := 0
 			attempts, err := r.run(context.Background(), func(context.Context) error {
 				err := tt.errs[calls]
@@ -366,7 +370,7 @@ func TestRetryErrorLimitsBeyondStackBuffer(t *testing.T) {
 	for i := range limits {
 		limits[i] = ErrorLimit{Err: fmt.Errorf("err %d", i), MaxAttempts: 3}
 	}
-	r := newRetrier(RetryPolicy{MaxAttempts: 10, ErrorLimits: limits, Clock: newFakeClock()}, nil)
+	r := newTestRetrier(RetryPolicy{MaxAttempts: 10, ErrorLimits: limits, Clock: newFakeClock()})
 
 	attempts, err := r.run(context.Background(), func(context.Context) error { return limits[9].Err })
 	assert.Equal(t, 3, attempts)
@@ -440,4 +444,33 @@ adaptivepool_retry_attempts_total{kind="sync"} 3
 	assert.Equal(t, "b", failed[0]["task_id"])
 	assert.Equal(t, "retries_exhausted", failed[0]["status"])
 	assert.InDelta(t, 3, failed[0]["attempts"], 0)
+}
+
+func TestForcedShutdownAbortsBackoff(t *testing.T) {
+	results := make(chan TaskResult, 1)
+	p, err := New(
+		WithMinWorkers(1), WithMaxWorkers(1),
+		WithLogger(discardLogger()),
+		WithRetry(RetryPolicy{MaxAttempts: 5, Backoff: ConstantBackoff{Delay: time.Hour}}),
+		WithOnTaskDone(func(r TaskResult) { results <- r }),
+	)
+	require.NoError(t, err)
+
+	attempted := make(chan struct{})
+	require.NoError(t, p.Submit(context.Background(), func(context.Context) error {
+		close(attempted)
+		return errTransient
+	}))
+	<-attempted
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_ = p.Shutdown(ctx)
+	assert.Less(t, time.Since(start), time.Second)
+
+	r := <-results
+	assert.Equal(t, StatusShutdown, r.Status)
+	assert.ErrorIs(t, r.Err, ErrPoolShutdown)
+	assert.ErrorIs(t, r.Err, errTransient)
 }

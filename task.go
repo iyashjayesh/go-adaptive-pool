@@ -54,6 +54,8 @@ const (
 	StatusBudgetExceeded Status = "budget_exceeded"
 	// StatusPermanent means the job returned an error wrapped with Permanent
 	StatusPermanent Status = "permanent"
+	// StatusShutdown means retrying was aborted by a forced pool shutdown
+	StatusShutdown Status = "shutdown"
 	// StatusCanceled means the job's context was done before it succeeded
 	StatusCanceled Status = "canceled"
 )
@@ -76,6 +78,8 @@ func statusOf(err error) Status {
 			return StatusBudgetExceeded
 		case re.Reason == ErrPermanentFailure:
 			return StatusPermanent
+		case re.Reason == ErrPoolShutdown:
+			return StatusShutdown
 		case errors.Is(re.Reason, context.Canceled), errors.Is(re.Reason, context.DeadlineExceeded):
 			return StatusCanceled
 		}

@@ -16,7 +16,7 @@ func (p *pool) executeJob(workerID int, job jobWrapper) {
 	start := time.Now()
 	attempts, err := 1, error(nil)
 	if p.retrier != nil {
-		attempts, err = p.retrier.run(job.ctx, job.job)
+		attempts, err = p.retrier.execute(&job)
 	} else {
 		err = runJob(job.ctx, job.job)
 	}
@@ -25,7 +25,7 @@ func (p *pool) executeJob(workerID int, job jobWrapper) {
 
 	queueWait := start.Sub(job.SubmittedAt)
 
-	p.metrics.recordJobDone(job.kind, status, queueWait, duration)
+	p.metrics.recordJobDone(job.kind, status, attempts, queueWait, duration)
 	if err != nil {
 		p.logFailure(workerID, job, status, attempts, duration, err)
 	}

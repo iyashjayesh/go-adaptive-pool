@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"math/rand/v2"
 	"slices"
@@ -171,9 +172,10 @@ func (rp *RetryPolicy) validate() error {
 // retrier executes jobs according to a normalized RetryPolicy
 type retrier struct {
 	policy RetryPolicy
+	logger *slog.Logger
 }
 
-func newRetrier(policy RetryPolicy) *retrier {
+func newRetrier(policy RetryPolicy, logger *slog.Logger) *retrier {
 	if policy.Backoff == nil {
 		policy.Backoff = ExponentialBackoff{Base: defaultRetryDelay}
 	}
@@ -181,12 +183,16 @@ func newRetrier(policy RetryPolicy) *retrier {
 		policy.Clock = systemClock{}
 	}
 	policy.ErrorLimits = slices.Clone(policy.ErrorLimits)
-	return &retrier{policy: policy}
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
+	return &retrier{policy: policy, logger: logger}
 }
 
-// run executes job until it succeeds or the policy says to stop. It returns
-// the number of attempts made and the final error.
-func (r *retrier) run(ctx context.Context, job Job) (int, error) {
+// execute runs the job until it succeeds or the policy says to stop. It
+// returns the number of attempts made and the final error.
+func (r *retrier) execute(w *jobWrapper) (int, error) {
+	ctx := w.ctx
 	var start time.Time
 	if r.policy.MaxElapsedTime > 0 {
 		start = r.policy.Clock.Now()
@@ -202,7 +208,7 @@ func (r *retrier) run(ctx context.Context, job Job) (int, error) {
 	}
 
 	for attempt := 1; ; attempt++ {
-		err := runJob(ctx, job)
+		err := runJob(ctx, w.job)
 		if err == nil {
 			return attempt, nil
 		}
@@ -216,10 +222,24 @@ func (r *retrier) run(ctx context.Context, job Job) (int, error) {
 		if r.policy.MaxElapsedTime > 0 && delay > r.policy.MaxElapsedTime-r.policy.Clock.Now().Sub(start) {
 			return attempt, &RetryError{Reason: ErrRetryBudgetExceeded, Attempts: attempt, Err: err}
 		}
+		r.logRetry(w, attempt, delay, err)
 		if waitErr := r.wait(ctx, delay); waitErr != nil {
 			return attempt, &RetryError{Reason: waitErr, Attempts: attempt, Err: err}
 		}
 	}
+}
+
+func (r *retrier) logRetry(w *jobWrapper, attempt int, delay time.Duration, err error) {
+	if !r.logger.Enabled(w.ctx, slog.LevelDebug) {
+		return
+	}
+	r.logger.LogAttrs(w.ctx, slog.LevelDebug, "retrying task",
+		slog.String("task_id", w.taskID),
+		slog.String("kind", w.kind),
+		slog.Int("attempt", attempt),
+		slog.Duration("delay", delay),
+		slog.Any("err", err),
+	)
 }
 
 // stopReason returns why retrying must stop after a failed attempt, or nil to retry

@@ -76,7 +76,7 @@ func New(options ...Option) (Pool, error) {
 	}
 
 	if config.retry != nil {
-		p.retrier = newRetrier(*config.retry)
+		p.retrier = newRetrier(*config.retry, p.logger)
 	}
 
 	// Start the dispatcher

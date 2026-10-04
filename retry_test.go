@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -65,9 +68,13 @@ func failN(n int, err error) (Job, *int) {
 
 var errTransient = errors.New("transient")
 
+func (r *retrier) run(ctx context.Context, job Job) (int, error) {
+	return r.execute(&jobWrapper{ctx: ctx, job: job})
+}
+
 func TestRetrySucceedsAfterFailures(t *testing.T) {
 	clock := newFakeClock()
-	r := newRetrier(RetryPolicy{MaxAttempts: 5, Backoff: ConstantBackoff{Delay: time.Second}, Clock: clock})
+	r := newRetrier(RetryPolicy{MaxAttempts: 5, Backoff: ConstantBackoff{Delay: time.Second}, Clock: clock}, nil)
 
 	job, calls := failN(2, errTransient)
 	attempts, err := r.run(context.Background(), job)
@@ -80,7 +87,7 @@ func TestRetrySucceedsAfterFailures(t *testing.T) {
 
 func TestRetryExhausted(t *testing.T) {
 	clock := newFakeClock()
-	r := newRetrier(RetryPolicy{MaxAttempts: 3, Clock: clock})
+	r := newRetrier(RetryPolicy{MaxAttempts: 3, Clock: clock}, nil)
 
 	job, calls := failN(10, errTransient)
 	attempts, err := r.run(context.Background(), job)
@@ -99,7 +106,7 @@ func TestRetryExhausted(t *testing.T) {
 
 func TestRetrySingleAttempt(t *testing.T) {
 	clock := newFakeClock()
-	r := newRetrier(RetryPolicy{MaxAttempts: 1, Clock: clock})
+	r := newRetrier(RetryPolicy{MaxAttempts: 1, Clock: clock}, nil)
 
 	attempts, err := r.run(context.Background(), func(context.Context) error { return errTransient })
 	assert.Equal(t, 1, attempts)
@@ -109,7 +116,7 @@ func TestRetrySingleAttempt(t *testing.T) {
 
 func TestRetryStopsWhenContextDone(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	r := newRetrier(RetryPolicy{MaxAttempts: 5, Clock: newFakeClock()})
+	r := newRetrier(RetryPolicy{MaxAttempts: 5, Clock: newFakeClock()}, nil)
 
 	attempts, err := r.run(ctx, func(context.Context) error {
 		cancel()
@@ -122,7 +129,7 @@ func TestRetryStopsWhenContextDone(t *testing.T) {
 
 func TestRetryWaitInterruptedByContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	r := newRetrier(RetryPolicy{MaxAttempts: 5, Backoff: ConstantBackoff{Delay: time.Hour}})
+	r := newRetrier(RetryPolicy{MaxAttempts: 5, Backoff: ConstantBackoff{Delay: time.Hour}}, nil)
 
 	time.AfterFunc(20*time.Millisecond, cancel)
 	start := time.Now()
@@ -135,7 +142,7 @@ func TestRetryWaitInterruptedByContext(t *testing.T) {
 }
 
 func TestRetryDoesNotRetryPanics(t *testing.T) {
-	r := newRetrier(RetryPolicy{MaxAttempts: 5, Clock: newFakeClock()})
+	r := newRetrier(RetryPolicy{MaxAttempts: 5, Clock: newFakeClock()}, nil)
 
 	attempts, err := r.run(context.Background(), func(context.Context) error { panic("bug") })
 	assert.Equal(t, 1, attempts)
@@ -175,7 +182,7 @@ func TestRetryMaxDelayCapsBackoff(t *testing.T) {
 		Backoff:     ExponentialBackoff{Base: time.Second, Multiplier: 2},
 		MaxDelay:    3 * time.Second,
 		Clock:       clock,
-	})
+	}, nil)
 
 	_, _ = r.run(context.Background(), func(context.Context) error { return errTransient })
 	assert.Equal(t, []time.Duration{time.Second, 2 * time.Second, 3 * time.Second, 3 * time.Second}, clock.Waits())
@@ -189,7 +196,7 @@ func TestRetryFullJitter(t *testing.T) {
 		MaxDelay:    500 * time.Millisecond,
 		Jitter:      true,
 		Clock:       clock,
-	})
+	}, nil)
 
 	_, _ = r.run(context.Background(), func(context.Context) error { return errTransient })
 
@@ -215,7 +222,7 @@ func TestRetryMaxElapsedTime(t *testing.T) {
 		Backoff:        ConstantBackoff{Delay: 3 * time.Second},
 		MaxElapsedTime: 10 * time.Second,
 		Clock:          clock,
-	})
+	}, nil)
 
 	attempts, err := r.run(context.Background(), func(context.Context) error { return errTransient })
 
@@ -234,7 +241,7 @@ func TestRetryMaxElapsedTimeCountsAttemptDuration(t *testing.T) {
 		Backoff:        ConstantBackoff{Delay: time.Second},
 		MaxElapsedTime: 10 * time.Second,
 		Clock:          clock,
-	})
+	}, nil)
 
 	attempts, err := r.run(context.Background(), func(context.Context) error {
 		clock.Advance(4 * time.Second)
@@ -253,7 +260,7 @@ func TestRetryMaxElapsedTimeHugeDelayDoesNotOverflow(t *testing.T) {
 		Backoff:        ExponentialBackoff{Base: time.Hour, Multiplier: 1e9},
 		MaxElapsedTime: time.Minute,
 		Clock:          newFakeClock(),
-	})
+	}, nil)
 
 	attempts, err := r.run(context.Background(), func(context.Context) error { return errTransient })
 	assert.Equal(t, 1, attempts)
@@ -262,7 +269,7 @@ func TestRetryMaxElapsedTimeHugeDelayDoesNotOverflow(t *testing.T) {
 
 func TestRetryStopsOnPermanent(t *testing.T) {
 	clock := newFakeClock()
-	r := newRetrier(RetryPolicy{MaxAttempts: 5, Clock: clock})
+	r := newRetrier(RetryPolicy{MaxAttempts: 5, Clock: clock}, nil)
 	errBadInput := errors.New("bad input")
 
 	attempts, err := r.run(context.Background(), func(context.Context) error {
@@ -289,7 +296,7 @@ func TestRetryAfterOverridesBackoff(t *testing.T) {
 		MaxDelay:    10 * time.Second,
 		Jitter:      true,
 		Clock:       clock,
-	})
+	}, nil)
 	errRateLimited := errors.New("429")
 
 	calls := 0
@@ -337,7 +344,7 @@ func TestRetryErrorLimits(t *testing.T) {
 				MaxAttempts: 6,
 				ErrorLimits: []ErrorLimit{{Err: errTimeout, MaxAttempts: 2}, {Err: errRateLimited, MaxAttempts: 5}},
 				Clock:       newFakeClock(),
-			})
+			}, nil)
 			calls := 0
 			attempts, err := r.run(context.Background(), func(context.Context) error {
 				err := tt.errs[calls]
@@ -359,7 +366,7 @@ func TestRetryErrorLimitsBeyondStackBuffer(t *testing.T) {
 	for i := range limits {
 		limits[i] = ErrorLimit{Err: fmt.Errorf("err %d", i), MaxAttempts: 3}
 	}
-	r := newRetrier(RetryPolicy{MaxAttempts: 10, ErrorLimits: limits, Clock: newFakeClock()})
+	r := newRetrier(RetryPolicy{MaxAttempts: 10, ErrorLimits: limits, Clock: newFakeClock()}, nil)
 
 	attempts, err := r.run(context.Background(), func(context.Context) error { return limits[9].Err })
 	assert.Equal(t, 3, attempts)
@@ -371,4 +378,66 @@ func TestRetryErrorLimitsValidation(t *testing.T) {
 		_, err := New(WithRetry(RetryPolicy{MaxAttempts: 2, ErrorLimits: []ErrorLimit{l}}))
 		assert.ErrorIs(t, err, ErrInvalidConfig)
 	}
+}
+
+func TestPoolRetryObservability(t *testing.T) {
+	var rec logRecorder
+	reg := prometheus.NewRegistry()
+	results := make(chan TaskResult, 2)
+	p := newTestPool(t,
+		WithMinWorkers(1), WithMaxWorkers(1),
+		WithLogger(rec.logger()),
+		WithPrometheusRegisterer(reg),
+		WithRetry(RetryPolicy{MaxAttempts: 3, Backoff: ConstantBackoff{Delay: time.Millisecond}}),
+		WithOnTaskDone(func(r TaskResult) { results <- r }),
+	)
+
+	ctx := context.Background()
+	recovers, _ := failN(1, errTransient)
+	require.NoError(t, p.SubmitTask(ctx, Task{ID: "a", Kind: "sync", Run: recovers}))
+	require.NoError(t, p.SubmitTask(ctx, Task{ID: "b", Kind: "sync", Run: func(context.Context) error { return errTransient }}))
+
+	got := map[string]TaskResult{}
+	for range 2 {
+		select {
+		case r := <-results:
+			got[r.ID] = r
+		case <-time.After(2 * time.Second):
+			t.Fatal("tasks did not finish")
+		}
+	}
+
+	assert.Equal(t, StatusSuccess, got["a"].Status)
+	assert.Equal(t, 2, got["a"].Attempts)
+	assert.Equal(t, StatusRetriesExhausted, got["b"].Status)
+	assert.Equal(t, 3, got["b"].Attempts)
+	assert.ErrorIs(t, got["b"].Err, errTransient)
+
+	assert.Equal(t, int64(2), p.Metrics().JobsRetried())
+	assert.Equal(t, int64(3), p.Metrics().RetryAttempts())
+	assert.Equal(t, int64(1), p.Metrics().JobsFailed())
+
+	expected := `
+# HELP adaptivepool_jobs_completed_total Jobs that finished executing, by final status
+# TYPE adaptivepool_jobs_completed_total counter
+adaptivepool_jobs_completed_total{kind="sync",status="retries_exhausted"} 1
+adaptivepool_jobs_completed_total{kind="sync",status="success"} 1
+# HELP adaptivepool_jobs_retried_total Jobs that needed at least one retry
+# TYPE adaptivepool_jobs_retried_total counter
+adaptivepool_jobs_retried_total{kind="sync"} 2
+# HELP adaptivepool_retry_attempts_total Retries performed across all jobs
+# TYPE adaptivepool_retry_attempts_total counter
+adaptivepool_retry_attempts_total{kind="sync"} 3
+`
+	require.NoError(t, testutil.GatherAndCompare(reg, strings.NewReader(expected),
+		"adaptivepool_jobs_completed_total", "adaptivepool_jobs_retried_total", "adaptivepool_retry_attempts_total"))
+
+	retries := rec.records("retrying task")
+	require.Len(t, retries, 3)
+	assert.Equal(t, "sync", retries[0]["kind"])
+	failed := rec.records("task failed")
+	require.Len(t, failed, 1)
+	assert.Equal(t, "b", failed[0]["task_id"])
+	assert.Equal(t, "retries_exhausted", failed[0]["status"])
+	assert.InDelta(t, 3, failed[0]["attempts"], 0)
 }

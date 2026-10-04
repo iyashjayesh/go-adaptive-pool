@@ -39,6 +39,12 @@ type Metrics interface {
 	// JobsRejected returns the total number of jobs rejected
 	JobsRejected() int64
 
+	// JobsRetried returns the number of processed jobs that needed at least one retry
+	JobsRetried() int64
+
+	// RetryAttempts returns the total number of retries across all jobs
+	RetryAttempts() int64
+
 	// AvgJobLatency returns the average job execution time
 	AvgJobLatency() time.Duration
 
@@ -54,6 +60,8 @@ type metrics struct {
 	jobsProcessed  atomic.Int64
 	jobsFailed     atomic.Int64
 	jobsRejected   atomic.Int64
+	jobsRetried    atomic.Int64
+	retryAttempts  atomic.Int64
 	totalLatency   atomic.Int64 // in nanoseconds
 	totalQueueWait atomic.Int64 // in nanoseconds
 
@@ -68,6 +76,8 @@ type metrics struct {
 	promJobsCompleted *prometheus.CounterVec   // kind, status
 	promJobDuration   *prometheus.HistogramVec // kind
 	promQueueWait     *prometheus.HistogramVec // kind
+	promJobsRetried   *prometheus.CounterVec   // kind
+	promRetries       *prometheus.CounterVec   // kind
 	promScaleUps      prometheus.Counter
 }
 
@@ -107,6 +117,8 @@ func newMetrics(state *poolState, config *Config) *metrics {
 	m.promJobDuration = histogramVec("job_duration_seconds", "Job execution time in seconds", prometheus.DefBuckets)
 	m.promQueueWait = histogramVec("job_queue_wait_seconds", "Time jobs spent queued before execution in seconds",
 		prometheus.ExponentialBuckets(0.0005, 4, 10))
+	m.promJobsRetried = counterVec("jobs_retried_total", "Jobs that needed at least one retry", "kind")
+	m.promRetries = counterVec("retry_attempts_total", "Retries performed across all jobs", "kind")
 	m.promScaleUps = prometheus.NewCounter(prometheus.CounterOpts{
 		Namespace: metricsNamespace, Name: "scale_up_events_total", Help: "Number of scale-up events", ConstLabels: constLabels,
 	})
@@ -117,6 +129,8 @@ func newMetrics(state *poolState, config *Config) *metrics {
 		m.promJobsCompleted,
 		m.promJobDuration,
 		m.promQueueWait,
+		m.promJobsRetried,
+		m.promRetries,
 		m.promScaleUps,
 		gauge("queue_depth", "Current number of jobs in the queue",
 			func() float64 { return float64(state.getQueueDepth()) }),
@@ -190,6 +204,16 @@ func (m *metrics) JobsRejected() int64 {
 	return m.jobsRejected.Load()
 }
 
+// JobsRetried returns the number of jobs that needed at least one retry
+func (m *metrics) JobsRetried() int64 {
+	return m.jobsRetried.Load()
+}
+
+// RetryAttempts returns the total number of retries across all jobs
+func (m *metrics) RetryAttempts() int64 {
+	return m.retryAttempts.Load()
+}
+
 // AvgJobLatency returns the average job execution time
 func (m *metrics) AvgJobLatency() time.Duration {
 	return average(m.totalLatency.Load(), m.jobsProcessed.Load())
@@ -223,13 +247,20 @@ func (m *metrics) recordJobRejected(kind, reason string) {
 	}
 }
 
-// recordJobDone records a finished job with its queue wait and execution time
-func (m *metrics) recordJobDone(kind string, status Status, queueWait, duration time.Duration) {
+// recordJobDone records a finished job. Retry counters are derived from the
+// attempt count here rather than per retry, keeping the retry loop free of
+// metric updates.
+func (m *metrics) recordJobDone(kind string, status Status, attempts int, queueWait, duration time.Duration) {
 	m.jobsProcessed.Add(1)
 	m.totalLatency.Add(int64(duration))
 	m.totalQueueWait.Add(int64(queueWait))
 	if status != StatusSuccess {
 		m.jobsFailed.Add(1)
+	}
+	retries := attempts - 1
+	if retries > 0 {
+		m.jobsRetried.Add(1)
+		m.retryAttempts.Add(int64(retries))
 	}
 
 	if m.enabled {
@@ -237,6 +268,10 @@ func (m *metrics) recordJobDone(kind string, status Status, queueWait, duration 
 		m.promJobsCompleted.WithLabelValues(kind, string(status)).Inc()
 		m.promJobDuration.WithLabelValues(kind).Observe(duration.Seconds())
 		m.promQueueWait.WithLabelValues(kind).Observe(queueWait.Seconds())
+		if retries > 0 {
+			m.promJobsRetried.WithLabelValues(kind).Inc()
+			m.promRetries.WithLabelValues(kind).Add(float64(retries))
+		}
 	}
 }
 

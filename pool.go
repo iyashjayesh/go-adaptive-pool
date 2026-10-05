@@ -145,11 +145,8 @@ func (p *pool) runWorker(id int) {
 
 	for {
 		select {
-		case <-p.state.workerShutdown:
-			// Shutdown signal received
-			return
-
 		case <-p.state.forceStop:
+			// Forced shutdown: stop without draining the queue
 			return
 
 		case job, ok := <-p.state.jobQueue:

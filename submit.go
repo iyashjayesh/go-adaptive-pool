@@ -25,7 +25,6 @@ func (p *pool) SubmitTask(ctx context.Context, task Task) error {
 	wrapper := jobWrapper{
 		job:         task.Run,
 		SubmittedAt: time.Now(),
-		id:          p.state.nextID(),
 		ctx:         ctx,
 		taskID:      task.ID,
 		kind:        task.Kind,

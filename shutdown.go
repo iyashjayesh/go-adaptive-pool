@@ -39,15 +39,8 @@ func (p *pool) Shutdown(ctx context.Context) error {
 			// Timeout or cancellation - force shutdown
 			p.logger.Warn("shutdown timeout, forcing worker termination")
 
-			// Abort retry backoff waits and signal all workers to terminate
+			// Abort retry backoff waits and stop idle workers
 			close(p.state.forceStop)
-			currentWorkers := p.state.getWorkerCount()
-			for range currentWorkers {
-				select {
-				case p.state.workerShutdown <- struct{}{}:
-				default:
-				}
-			}
 
 			// Wait a bit more for workers to respond
 			select {

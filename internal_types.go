@@ -14,7 +14,6 @@ type Job func(ctx context.Context) error
 type jobWrapper struct {
 	job         Job
 	SubmittedAt time.Time
-	id          uint64
 	ctx         context.Context
 	taskID      string
 	kind        string
@@ -35,10 +34,9 @@ type poolState struct {
 	jobQueue chan jobWrapper
 
 	// Worker management
-	workerWg       sync.WaitGroup
-	workerCount    atomic.Int32
-	busyWorkers    atomic.Int32
-	workerShutdown chan struct{}
+	workerWg    sync.WaitGroup
+	workerCount atomic.Int32
+	busyWorkers atomic.Int32
 
 	// Shutdown coordination
 	shutdownOnce  sync.Once
@@ -49,18 +47,14 @@ type poolState struct {
 	// Scaling coordination
 	scalingMu   sync.Mutex
 	lastScaleUp time.Time
-
-	// Job ID generation
-	nextJobID atomic.Uint64
 }
 
 // newPoolState Creates a new pool state
 func newPoolState(queueSize int) *poolState {
 	ps := &poolState{
-		jobQueue:       make(chan jobWrapper, queueSize),
-		workerShutdown: make(chan struct{}),
-		shutdownDone:   make(chan struct{}),
-		forceStop:      make(chan struct{}),
+		jobQueue:     make(chan jobWrapper, queueSize),
+		shutdownDone: make(chan struct{}),
+		forceStop:    make(chan struct{}),
 	}
 	ps.shutdownState.Store(int32(shutdownStateRunning))
 	return ps
@@ -109,9 +103,4 @@ func (ps *poolState) getQueueUtilization() float64 {
 		return 0.0
 	}
 	return float64(ps.getQueueDepth()) / float64(capacity)
-}
-
-// nextID generates the next job ID
-func (ps *poolState) nextID() uint64 {
-	return ps.nextJobID.Add(1)
 }

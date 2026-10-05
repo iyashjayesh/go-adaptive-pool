@@ -2,7 +2,6 @@ package adaptivepool
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 	"runtime/debug"
 	"time"
@@ -79,8 +78,7 @@ func (p *pool) logFailure(workerID int, job jobWrapper, status Status, attempts 
 		slog.Duration("duration", duration),
 		slog.Any("err", err),
 	}
-	var pe *PanicError
-	if errors.As(err, &pe) {
+	if pe, ok := err.(*PanicError); ok {
 		attrs = append(attrs, slog.String("stack", string(pe.Stack)))
 	}
 	p.logger.LogAttrs(job.ctx, slog.LevelError, "task failed", attrs...)

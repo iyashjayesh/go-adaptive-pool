@@ -99,3 +99,34 @@ type retryAfterError struct {
 
 func (e *retryAfterError) Error() string { return e.err.Error() }
 func (e *retryAfterError) Unwrap() error { return e.err }
+
+// findMarker returns the first error of type T in err's tree. It is used
+// instead of errors.As for the package's own marker types because it needs
+// no pointer target and therefore does not allocate on the failure path.
+func findMarker[T error](err error) (T, bool) {
+	var zero T
+	for err != nil {
+		if t, ok := err.(T); ok {
+			return t, true
+		}
+		switch u := err.(type) {
+		case interface{ Unwrap() error }:
+			err = u.Unwrap()
+		case interface{ Unwrap() []error }:
+			for _, e := range u.Unwrap() {
+				if t, ok := findMarker[T](e); ok {
+					return t, true
+				}
+			}
+			return zero, false
+		default:
+			return zero, false
+		}
+	}
+	return zero, false
+}
+
+func hasMarker[T error](err error) bool {
+	_, ok := findMarker[T](err)
+	return ok
+}

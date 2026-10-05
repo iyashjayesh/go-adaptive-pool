@@ -247,9 +247,8 @@ func (r *retrier) logRetry(w *jobWrapper, attempt int, delay time.Duration, err 
 
 // stopReason returns why retrying must stop after a failed attempt, or nil to retry
 func (r *retrier) stopReason(ctx context.Context, attempt int, err error, counts []int) error {
-	var perm *permanentError
 	switch {
-	case errors.As(err, &perm):
+	case hasMarker[*permanentError](err):
 		return ErrPermanentFailure
 	case ctx.Err() != nil:
 		return ctx.Err()
@@ -274,8 +273,7 @@ func (r *retrier) errorLimitReached(err error, counts []int) bool {
 // delay computes the wait before the given retry. A RetryAfter hint on err
 // replaces the backoff value and is not jittered; MaxDelay caps both.
 func (r *retrier) delay(retry int, err error) time.Duration {
-	var hint *retryAfterError
-	if errors.As(err, &hint) {
+	if hint, ok := findMarker[*retryAfterError](err); ok {
 		return r.capDelay(hint.delay)
 	}
 	d := r.capDelay(r.policy.Backoff.Next(retry))

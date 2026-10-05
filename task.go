@@ -2,7 +2,6 @@ package adaptivepool
 
 import (
 	"context"
-	"errors"
 	"time"
 )
 
@@ -60,27 +59,25 @@ const (
 	StatusCanceled Status = "canceled"
 )
 
-// statusOf classifies the final error of a task
+// statusOf classifies the final error of a task. Errors reaching it come
+// straight from runJob or the retrier, so a type switch is sufficient.
 func statusOf(err error) Status {
-	if err == nil {
+	switch e := err.(type) {
+	case nil:
 		return StatusSuccess
-	}
-	var pe *PanicError
-	if errors.As(err, &pe) {
+	case *PanicError:
 		return StatusPanic
-	}
-	var re *RetryError
-	if errors.As(err, &re) {
-		switch {
-		case re.Reason == ErrRetriesExhausted:
+	case *RetryError:
+		switch e.Reason {
+		case ErrRetriesExhausted:
 			return StatusRetriesExhausted
-		case re.Reason == ErrRetryBudgetExceeded:
+		case ErrRetryBudgetExceeded:
 			return StatusBudgetExceeded
-		case re.Reason == ErrPermanentFailure:
+		case ErrPermanentFailure:
 			return StatusPermanent
-		case re.Reason == ErrPoolShutdown:
+		case ErrPoolShutdown:
 			return StatusShutdown
-		case errors.Is(re.Reason, context.Canceled), errors.Is(re.Reason, context.DeadlineExceeded):
+		case context.Canceled, context.DeadlineExceeded:
 			return StatusCanceled
 		}
 	}

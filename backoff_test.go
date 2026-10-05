@@ -42,6 +42,8 @@ func TestBackoffValidation(t *testing.T) {
 		ExponentialBackoff{Base: -1},
 		ExponentialBackoff{Base: time.Second, Multiplier: 0.5},
 		&ExponentialBackoff{Base: time.Second, Multiplier: 0.5},
+		ExponentialBackoff{Base: time.Second, Multiplier: math.NaN()},
+		ExponentialBackoff{Base: time.Second, Multiplier: math.Inf(1)},
 	}
 	for _, b := range invalid {
 		_, err := New(WithRetry(RetryPolicy{MaxAttempts: 2, Backoff: b}))

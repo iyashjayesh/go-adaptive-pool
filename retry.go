@@ -21,9 +21,11 @@ const (
 // the worker that executed the job: no re-queueing and no extra goroutines.
 //
 // Every error is retried unless it is wrapped with Permanent or the job's
-// context is done. Panics are never retried. During a graceful Shutdown,
-// in-flight retries continue; once Shutdown's context expires, pending
-// backoff waits are aborted. When retrying stops, the job's final error is a *RetryError.
+// context is done. Panics are never retried. When retrying stops, the job's
+// final error is a *RetryError.
+//
+// During a graceful Shutdown in-flight retries continue, since they are
+// bounded; once Shutdown's context expires, pending backoff waits abort.
 type RetryPolicy struct {
 	// MaxAttempts is the maximum number of times a job runs, including the
 	// first attempt. Required and must be >= 1.
@@ -118,8 +120,8 @@ func (b ExponentialBackoff) Next(retry int) time.Duration {
 func (b ConstantBackoff) validate() error { return nonNegative("ConstantBackoff.Delay", b.Delay) }
 func (b LinearBackoff) validate() error   { return nonNegative("LinearBackoff.Base", b.Base) }
 func (b ExponentialBackoff) validate() error {
-	if b.Multiplier != 0 && b.Multiplier < 1 {
-		return fmt.Errorf("%w: ExponentialBackoff.Multiplier must be >= 1", ErrInvalidConfig)
+	if b.Multiplier != 0 && !(b.Multiplier >= 1 && !math.IsInf(b.Multiplier, 1)) {
+		return fmt.Errorf("%w: ExponentialBackoff.Multiplier must be a finite value >= 1", ErrInvalidConfig)
 	}
 	return nonNegative("ExponentialBackoff.Base", b.Base)
 }

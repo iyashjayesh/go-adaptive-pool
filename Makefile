@@ -1,4 +1,4 @@
-.PHONY: all build test lint bench run-http run-batch help clean
+.PHONY: all build test lint bench run-http run-batch run-observability help clean
 
 # Go parameters
 GOCMD=go
@@ -21,6 +21,7 @@ help:
 	@echo "  bench         Run all benchmarks"
 	@echo "  run-http      Run the HTTP server example"
 	@echo "  run-batch     Run the batch processor example"
+	@echo "  run-observability Run the Prometheus/Grafana observability example"
 	@echo "  clean         Clean build artifacts and coverage files"
 	@echo "  help          Show this help message"
 
@@ -48,6 +49,10 @@ run-http:
 run-batch:
 	@echo "Running batch processor example..."
 	$(GOCMD) run examples/batch_processor/main.go
+
+run-observability:
+	@echo "Running observability example (metrics on :2112/metrics)..."
+	$(GOCMD) run ./examples/observability
 
 run-1m-with:
 	@echo "Running 1M RPS simulator WITH adaptivepool..."

@@ -20,7 +20,8 @@ It provides:
 - Bounded concurrency via a fixed-size queue
 - Adaptive worker lifecycle. Workers scale up and down based on queue pressure
 - Explicit backpressure. When the queue is full, submissions block or fail fast
-- Observability via built-in Prometheus metrics
+- Observability via Prometheus metrics, structured `slog` logs and an `OnTaskDone` hook
+- Inline retries with pluggable backoff, jitter and time budgets
 - Safe shutdown with graceful draining and no goroutine leaks
 
 The `adaptive` behavior here is worker lifecycle adaptation, not request-level concurrency control.
@@ -34,10 +35,14 @@ The `adaptive` behavior here is worker lifecycle adaptation, not request-level c
 - *Explicit backpressure*
     - When overloaded, submissions block or are rejected. The caller must handle it.
 - *Observability*
-    - Built-in Prometheus metrics:
-        - queue depth
-        - throughput
-        - latency
+    - Prometheus metrics per pool and task kind: workers (active/busy), queue depth and wait, throughput, execution time, failures by reason, retries
+    - Structured `log/slog` logging with task ID, kind, status and attempts
+    - `OnTaskDone` hook to react to each task's outcome (dead-letter queues, tracing)
+    - Ready-made Grafana dashboard in [`examples/observability`](examples/observability)
+- *Retries*
+    - Run inline on the worker (no re-queueing, no extra goroutines), zero allocations on the hot path
+    - Constant, linear and exponential backoff, full jitter, per-wait cap and total time budget
+    - `Permanent` errors, `RetryAfter` hints and per-error attempt limits
 - *Safe shutdown*
     - Graceful draining of queued jobs and clean worker shutdown with no leaks.
 
@@ -109,6 +114,21 @@ pool, err := adaptivepool.New(
     
     // Enable/disable metrics (default: true)
     adaptivepool.WithMetricsEnabled(true),
+
+    // Name used as the "pool" log attribute and metric label (default: "")
+    adaptivepool.WithName("orders"),
+
+    // Register Prometheus metrics (default: not registered)
+    adaptivepool.WithPrometheusRegisterer(prometheus.DefaultRegisterer),
+
+    // Structured logger (default: slog.Default())
+    adaptivepool.WithLogger(slog.New(slog.NewJSONHandler(os.Stdout, nil))),
+
+    // Called once per finished task (default: none)
+    adaptivepool.WithOnTaskDone(func(r adaptivepool.TaskResult) { /* ... */ }),
+
+    // Retry failed jobs (default: disabled)
+    adaptivepool.WithRetry(adaptivepool.RetryPolicy{MaxAttempts: 3}),
 )
 ```
 
@@ -135,18 +155,62 @@ defer cancel()
 err := pool.Submit(ctx, job)
 ```
 
-## Metrics
+## Retries
 
-Access pool metrics for observability:
+```go
+pool, _ := adaptivepool.New(
+    adaptivepool.WithRetry(adaptivepool.RetryPolicy{
+        MaxAttempts:    5,
+        Backoff:        adaptivepool.ExponentialBackoff{Base: 100 * time.Millisecond},
+        MaxDelay:       2 * time.Second,
+        MaxElapsedTime: 10 * time.Second,
+        Jitter:         true,
+    }),
+)
+
+job := func(ctx context.Context) error {
+    if err := validate(req); err != nil {
+        return adaptivepool.Permanent(err) // never retried
+    }
+    return callAPI(ctx) // retried with backoff
+}
+```
+
+See the [Retries and Observability guide](docs/RETRY_AND_OBSERVABILITY.md) for every option and its use case.
+
+## Observability
+
+Identify tasks so logs and metrics can tell them apart:
+
+```go
+pool.SubmitTask(ctx, adaptivepool.Task{
+    ID:   "order-8812",  // unique: logs and OnTaskDone only
+    Kind: "send_email",  // bounded: metric label
+    Run:  sendEmail,
+})
+```
+
+Expose Prometheus metrics and plot them with the bundled [Grafana dashboard](examples/observability):
+
+```go
+pool, _ := adaptivepool.New(
+    adaptivepool.WithName("orders"),
+    adaptivepool.WithPrometheusRegisterer(prometheus.DefaultRegisterer),
+)
+http.Handle("/metrics", promhttp.Handler())
+```
+
+In-process metrics are always available:
 
 ```go
 metrics := pool.Metrics()
 
 fmt.Printf("Queue Depth: %d\n", metrics.QueueDepth())
-fmt.Printf("Active Workers: %d\n", metrics.ActiveWorkers())
-fmt.Printf("Jobs Processed: %d\n", metrics.JobsProcessed())
+fmt.Printf("Active / Busy Workers: %d / %d\n", metrics.ActiveWorkers(), metrics.BusyWorkers())
+fmt.Printf("Jobs Processed / Failed: %d / %d\n", metrics.JobsProcessed(), metrics.JobsFailed())
 fmt.Printf("Jobs Rejected: %d\n", metrics.JobsRejected())
-fmt.Printf("Avg Latency: %v\n", metrics.AvgJobLatency())
+fmt.Printf("Retries: %d\n", metrics.RetryAttempts())
+fmt.Printf("Avg Latency / Queue Wait: %v / %v\n", metrics.AvgJobLatency(), metrics.AvgQueueWait())
 ```
 
 ## Graceful Shutdown
@@ -192,6 +256,15 @@ See [examples/batch_processor](examples/batch_processor/main.go) for processing 
 ```bash
 cd examples/batch_processor
 go run main.go
+```
+
+### Observability with Prometheus and Grafana
+
+See [examples/observability](examples/observability) for a pool under bursty load with retries, plus a Prometheus and Grafana stack with a provisioned dashboard:
+
+```bash
+make run-observability
+cd examples/observability && docker compose up   # Grafana on http://localhost:3000
 ```
 
 ## Scope and non-goals
@@ -280,7 +353,7 @@ Producer → Submit(ctx) → Bounded Queue → Dispatcher → Adaptive Workers �
 Key components:
 - **Bounded Queue**: Buffered channel with fixed capacity
 - **Dispatcher**: Routes jobs to workers and monitors scaling
-- **Workers**: Execute jobs with panic recovery and metrics tracking
+- **Workers**: Execute jobs with panic recovery, inline retries and metrics tracking
 - **Scaling Logic**: Adjusts worker count based on queue utilization
 
 ## Comparison with Other Libraries
@@ -326,6 +399,7 @@ Inspired by:
 
 ## Related Documentation
 
+- [Retries and Observability](docs/RETRY_AND_OBSERVABILITY.md) - Retry policy, logging, metrics and hooks
 - [Examples](examples/) - Complete working examples
 - [Benchmarks](.) - Performance comparisons
 

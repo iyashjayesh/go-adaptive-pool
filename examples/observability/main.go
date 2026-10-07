@@ -43,6 +43,7 @@ func main() {
 		adaptivepool.WithMaxWorkers(32),
 		adaptivepool.WithQueueSize(500),
 		adaptivepool.WithScaleDownIdleDuration(10*time.Second),
+		adaptivepool.WithScaleCooldown(time.Second), // react quickly to the 30s bursts
 		adaptivepool.WithLogger(logger),
 		adaptivepool.WithPrometheusRegisterer(prometheus.DefaultRegisterer),
 		adaptivepool.WithRetry(adaptivepool.RetryPolicy{

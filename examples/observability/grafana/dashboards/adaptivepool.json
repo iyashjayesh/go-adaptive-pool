@@ -79,7 +79,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(adaptivepool_active_workers{pool=~\"$pool\"})",
+          "expr": "(sum(adaptivepool_active_workers{pool=~\"$pool\"})) or vector(0)",
           "legendFormat": ""
         }
       ],
@@ -121,7 +121,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(adaptivepool_busy_workers{pool=~\"$pool\"})",
+          "expr": "(sum(adaptivepool_busy_workers{pool=~\"$pool\"})) or vector(0)",
           "legendFormat": ""
         }
       ],
@@ -163,7 +163,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(adaptivepool_queue_depth{pool=~\"$pool\"})",
+          "expr": "(sum(adaptivepool_queue_depth{pool=~\"$pool\"})) or vector(0)",
           "legendFormat": ""
         }
       ],
@@ -205,7 +205,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(rate(adaptivepool_jobs_completed_total{pool=~\"$pool\"}[1m]))",
+          "expr": "(sum(rate(adaptivepool_jobs_completed_total{pool=~\"$pool\"}[1m]))) or vector(0)",
           "legendFormat": ""
         }
       ],
@@ -247,7 +247,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(rate(adaptivepool_jobs_completed_total{pool=~\"$pool\",status!=\"success\"}[5m])) / sum(rate(adaptivepool_jobs_completed_total{pool=~\"$pool\"}[5m]))",
+          "expr": "(sum(rate(adaptivepool_jobs_completed_total{pool=~\"$pool\",status!=\"success\"}[5m])) / sum(rate(adaptivepool_jobs_completed_total{pool=~\"$pool\"}[5m]))) or vector(0)",
           "legendFormat": ""
         }
       ],
@@ -289,7 +289,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(rate(adaptivepool_jobs_rejected_total{pool=~\"$pool\"}[1m]))",
+          "expr": "(sum(rate(adaptivepool_jobs_rejected_total{pool=~\"$pool\"}[1m]))) or vector(0)",
           "legendFormat": ""
         }
       ],

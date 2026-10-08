@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -65,6 +66,22 @@ func main() {
 		os.Exit(1)
 	}
 
+	// A small pool for interactive work. It has no retries: a request has a
+	// deadline, so failing fast beats queueing work nobody will wait for.
+	previews, err := adaptivepool.New(
+		adaptivepool.WithName("previews"),
+		adaptivepool.WithMinWorkers(2),
+		adaptivepool.WithMaxWorkers(4),
+		adaptivepool.WithQueueSize(8), // ~80ms of work: queued requests still meet their deadline
+		adaptivepool.WithScaleCooldown(time.Second),
+		adaptivepool.WithLogger(logger),
+		adaptivepool.WithPrometheusRegisterer(prometheus.DefaultRegisterer),
+	)
+	if err != nil {
+		logger.Error("creating pool", slog.Any("err", err))
+		os.Exit(1)
+	}
+
 	http.Handle("/metrics", promhttp.Handler())
 	server := &http.Server{Addr: ":2112", ReadHeaderTimeout: 3 * time.Second}
 	go func() {
@@ -76,12 +93,19 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	generateLoad(ctx, pool)
+
+	// Producers stop before the pools shut down
+	var producers sync.WaitGroup
+	producers.Go(func() { generateLoad(ctx, pool) })
+	producers.Go(func() { serveRequests(ctx, previews) })
+	producers.Go(func() { trackEvents(ctx, previews) })
+	producers.Wait()
 
 	logger.Info("shutting down", slog.Int64("dead_letters", deadLetters.Load()))
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_ = pool.Shutdown(shutdownCtx)
+	_ = previews.Shutdown(shutdownCtx)
 	_ = server.Shutdown(shutdownCtx)
 }
 
@@ -96,9 +120,8 @@ func generateLoad(ctx context.Context, pool adaptivepool.Pool) {
 
 	var seq int
 	for {
-		// Alternate between quiet and burst periods every 30s
 		rate := 50
-		if time.Now().Unix()/30%2 == 0 {
+		if burst() {
 			rate = 400
 		}
 		tick := time.Second / time.Duration(rate)
@@ -121,6 +144,87 @@ func generateLoad(ctx context.Context, pool adaptivepool.Pool) {
 			},
 		})
 	}
+}
+
+// serveRequests simulates interactive requests, such as rendering a preview
+// for an HTTP response, that must finish within the request's deadline.
+//
+// Here the submit context should also be the job context: if the request
+// times out or the client goes away, both waiting for a queue slot and the
+// work itself should stop. When the pool is saturated, Submit returns
+// ErrTimeout (rejected, reason="timeout") or context.Canceled
+// (reason="canceled") and a real handler would respond with 503.
+func serveRequests(ctx context.Context, pool adaptivepool.Pool) {
+	var requests sync.WaitGroup
+	defer requests.Wait()
+
+	for id := 1; ; id++ {
+		rate := 40
+		if burst() {
+			rate = 150 // more than 4 workers can serve
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(time.Second / time.Duration(rate)):
+		}
+		requests.Go(func() { handleRequest(ctx, pool, id) })
+	}
+}
+
+func handleRequest(ctx context.Context, pool adaptivepool.Pool, id int) {
+	reqCtx, cancel := context.WithTimeout(ctx, 250*time.Millisecond)
+	defer cancel()
+	if rand.Float64() < 0.05 {
+		time.AfterFunc(rand.N(100*time.Millisecond), cancel) // client disconnects
+	}
+
+	done := make(chan struct{})
+	err := pool.SubmitTask(reqCtx, adaptivepool.Task{
+		ID:   fmt.Sprintf("preview-%d", id),
+		Kind: "render_preview",
+		Run: func(ctx context.Context) error {
+			defer close(done)
+			return work(ctx, 40*time.Millisecond)
+		},
+	})
+	if err != nil {
+		return // rejected: respond 503 Service Unavailable
+	}
+	select {
+	case <-done:
+	case <-reqCtx.Done():
+	}
+}
+
+// trackEvents submits best-effort telemetry: if no worker slot frees up
+// within 5ms the event is dropped (rejected, reason="timeout").
+//
+// The submit context is also the job's context, so a short submit deadline
+// would cancel the job too. The job therefore ignores its context and uses
+// its own; the deadline only bounds the wait for a queue slot.
+func trackEvents(ctx context.Context, pool adaptivepool.Pool) {
+	for id := 1; ; id++ {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(20 * time.Millisecond):
+		}
+		submitCtx, cancel := context.WithTimeout(ctx, 5*time.Millisecond)
+		_ = pool.SubmitTask(submitCtx, adaptivepool.Task{
+			ID:   fmt.Sprintf("event-%d", id),
+			Kind: "track_event",
+			Run: func(context.Context) error {
+				return work(context.Background(), 5*time.Millisecond)
+			},
+		})
+		cancel()
+	}
+}
+
+// burst reports whether load is in a burst phase; phases alternate every 30s
+func burst() bool {
+	return time.Now().Unix()/30%2 == 0
 }
 
 // work simulates a task taking roughly latency

@@ -23,7 +23,17 @@ the **Adaptive Pool** dashboard. Prometheus is on http://localhost:9090.
 | `resize_image` | 2% `Permanent` invalid payload errors | `permanent` (never retried) |
 | `charge_card` | 15% rate limiting with a `RetryAfter` hint of 200ms | retries honouring the hint |
 
-Load alternates between 50 and 400 tasks/s every 30 seconds, so you can watch
+A second pool, `previews` (4 workers, queue of 8, no retries), receives
+interactive and best-effort work, so the rejection panels have data:
+
+| Kind | Behaviour | Shows up as |
+|---|---|---|
+| `render_preview` | Request-scoped work with a 250ms deadline; 5% of clients disconnect early | rejected `canceled`, completed `canceled` when the deadline passes in the queue |
+| `track_event` | Best-effort telemetry, dropped if no slot frees within 5ms | rejected `timeout` during bursts |
+
+Use the dashboard's **Pool** selector to compare the two pools.
+
+Load on `orders` alternates between 50 and 400 tasks/s every 30 seconds, so you can watch
 the pool scale up, the queue fill and drain, and queue wait rise during bursts.
 
 ## Logs

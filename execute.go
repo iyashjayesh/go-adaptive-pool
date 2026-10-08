@@ -21,6 +21,11 @@ func (p *pool) executeJob(workerID int, job jobWrapper) {
 	}
 	duration := time.Since(start)
 	status := statusOf(err)
+	if status == StatusError && job.ctx.Err() != nil {
+		// Without retries, report failures after the caller gave up the same
+		// way the retry engine does
+		status = StatusCanceled
+	}
 
 	queueWait := start.Sub(job.SubmittedAt)
 

@@ -43,7 +43,7 @@ type Status string
 const (
 	// StatusSuccess means the job returned nil
 	StatusSuccess Status = "success"
-	// StatusError means the job returned an error
+	// StatusError means the job returned an error while its context was still active
 	StatusError Status = "error"
 	// StatusPanic means the job panicked; the error is a *PanicError
 	StatusPanic Status = "panic"
@@ -55,7 +55,7 @@ const (
 	StatusPermanent Status = "permanent"
 	// StatusShutdown means retrying was aborted by a forced pool shutdown
 	StatusShutdown Status = "shutdown"
-	// StatusCanceled means the job's context was done before it succeeded
+	// StatusCanceled means the job failed after its context was done
 	StatusCanceled Status = "canceled"
 )
 

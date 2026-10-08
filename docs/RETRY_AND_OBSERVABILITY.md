@@ -490,7 +490,7 @@ errors.Is(err, errUpstream)                      // also true
 | `ErrRetriesExhausted` | `retries_exhausted` | `MaxAttempts` or an `ErrorLimit` was reached |
 | `ErrRetryBudgetExceeded` | `budget_exceeded` | The next wait would exceed `MaxElapsedTime` |
 | `ErrPermanentFailure` | `permanent` | The job returned a `Permanent` error |
-| `context.Canceled` / `context.DeadlineExceeded` | `canceled` | The job's context was done |
+| `context.Canceled` / `context.DeadlineExceeded` | `canceled` | The job failed after its context was done, with or without retries |
 | `ErrPoolShutdown` | `shutdown` | A forced shutdown aborted a backoff wait |
 
 Only the last attempt's error is kept, rather than the whole history: it's
@@ -551,12 +551,12 @@ Every finished task has exactly one `Status`. The same value appears in the
 | Status | Meaning |
 |---|---|
 | `success` | The job returned nil (possibly after retries) |
-| `error` | The job returned an error and retries are disabled |
+| `error` | The job returned an error and retries are disabled (its context was still active) |
 | `panic` | The job panicked (`*PanicError`, never retried) |
 | `retries_exhausted` | All allowed attempts failed |
 | `budget_exceeded` | `MaxElapsedTime` would have been exceeded |
 | `permanent` | The job returned a `Permanent` error |
-| `canceled` | The job's context was done |
+| `canceled` | The job failed after its context was done, with or without retries |
 | `shutdown` | A forced shutdown aborted retrying |
 
 ---

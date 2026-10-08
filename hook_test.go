@@ -62,3 +62,29 @@ func TestOnTaskDonePanicDoesNotKillWorker(t *testing.T) {
 	require.Eventually(t, func() bool { return len(rec.records("OnTaskDone hook panicked")) == 2 }, 2*time.Second, 10*time.Millisecond)
 	assert.Equal(t, 1, p.Metrics().ActiveWorkers())
 }
+
+func TestStatusCanceledWithoutRetries(t *testing.T) {
+	results := make(chan TaskResult, 2)
+	p := newTestPool(t,
+		WithMinWorkers(1), WithMaxWorkers(1),
+		WithLogger(discardLogger()),
+		WithOnTaskDone(func(r TaskResult) { results <- r }),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	require.NoError(t, p.SubmitTask(ctx, Task{ID: "canceled", Run: func(ctx context.Context) error {
+		cancel()
+		return ctx.Err()
+	}}))
+	require.NoError(t, p.SubmitTask(context.Background(), Task{ID: "error", Run: func(context.Context) error {
+		return context.Canceled // an inner operation's error while the job context is live
+	}}))
+
+	got := map[string]Status{}
+	for range 2 {
+		r := <-results
+		got[r.ID] = r.Status
+	}
+	assert.Equal(t, StatusCanceled, got["canceled"])
+	assert.Equal(t, StatusError, got["error"])
+}

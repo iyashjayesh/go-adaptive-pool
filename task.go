@@ -17,6 +17,21 @@ type Task struct {
 
 	// Run is the work to execute.
 	Run Job
+
+	// Context is the context Run executes with. When nil, the context passed
+	// to SubmitTask is used for both waiting for queue space and execution.
+	//
+	// Set it to decouple the two, e.g. to bound how long SubmitTask waits
+	// under backpressure without that deadline cancelling the job, or to let
+	// a job outlive the request that submitted it:
+	//
+	//	submitCtx, cancel := context.WithTimeout(r.Context(), 50*time.Millisecond)
+	//	defer cancel()
+	//	err := pool.SubmitTask(submitCtx, adaptivepool.Task{
+	//		Context: context.WithoutCancel(r.Context()), // keeps values, not cancellation
+	//		Run:     job,
+	//	})
+	Context context.Context
 }
 
 // TaskResult describes how a task finished. It is passed to the OnTaskDone hook.

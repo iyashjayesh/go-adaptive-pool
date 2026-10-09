@@ -13,9 +13,12 @@ type Pool interface {
 	// Submit Submits a job to the pool for execution
 	// Returns ErrPoolShutdown if the pool is shutdown
 	// Blocks until the job is enqueued or context is cancelled
+	// ctx is also the context the job runs with; use SubmitTask with
+	// Task.Context to give the job a different one
 	Submit(ctx context.Context, job Job) error
 
-	// SubmitTask is like Submit but carries a task ID and kind for logs and metrics
+	// SubmitTask is like Submit but carries a task ID and kind for logs and
+	// metrics, and an optional execution context separate from ctx
 	SubmitTask(ctx context.Context, task Task) error
 
 	// Shutdown gracefully shuts down the pool

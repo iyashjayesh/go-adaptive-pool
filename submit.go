@@ -27,10 +27,14 @@ func (p *pool) SubmitTask(ctx context.Context, task Task) error {
 		return ErrPoolShutdown
 	}
 
+	runCtx := task.Context
+	if runCtx == nil {
+		runCtx = ctx
+	}
 	wrapper := jobWrapper{
 		job:         task.Run,
 		SubmittedAt: time.Now(),
-		ctx:         ctx,
+		ctx:         runCtx,
 		taskID:      task.ID,
 		kind:        task.Kind,
 	}

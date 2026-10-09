@@ -138,22 +138,28 @@ The pool enforces backpressure when the queue is full:
 
 ```go
 // Block until capacity is available
-ctx := context.Background()
-err := pool.Submit(ctx, job)
+err := pool.Submit(context.Background(), job)
 
-// Timeout after 5 seconds
-ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+// Wait at most 5 seconds for capacity
+waitCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 defer cancel()
-err := pool.Submit(ctx, job)
-if err == adaptivepool.ErrTimeout {
+err := pool.SubmitTask(waitCtx, adaptivepool.Task{
+    Context: context.Background(), // the job's own context, unaffected by waitCtx
+    Run:     job,
+})
+if errors.Is(err, adaptivepool.ErrTimeout) {
     // Handle overload
 }
 
-// Return immediately if full
-ctx, cancel := context.WithTimeout(context.Background(), 0)
+// Don't wait at all if the queue is full
+waitCtx, cancel := context.WithTimeout(context.Background(), 0)
 defer cancel()
-err := pool.Submit(ctx, job)
+err := pool.SubmitTask(waitCtx, adaptivepool.Task{Context: context.Background(), Run: job})
 ```
+
+The context passed to `Submit` is also the context the job runs with, so a
+wait deadline on it would also cancel the job. `Task.Context` separates the
+two; see [Submit context vs execution context](docs/RETRY_AND_OBSERVABILITY.md#submit-context-vs-execution-context).
 
 ## Retries
 

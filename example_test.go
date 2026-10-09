@@ -87,3 +87,32 @@ func ExampleWithOnTaskDone() {
 	fmt.Printf("%s %s %s: %v\n", r.Kind, r.ID, r.Status, r.Err)
 	// Output: send_email order-8812 error: smtp: connection refused
 }
+
+func ExamplePool_SubmitTask() {
+	done := make(chan error, 1)
+	pool, err := adaptivepool.New(adaptivepool.WithLogger(slog.New(slog.DiscardHandler)))
+	if err != nil {
+		panic(err)
+	}
+	defer func() { _ = pool.Shutdown(context.Background()) }()
+
+	// Wait at most 50ms for queue space, but let the job run on its own
+	// context so the wait deadline doesn't cancel it.
+	waitCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	err = pool.SubmitTask(waitCtx, adaptivepool.Task{
+		Kind:    "send_email",
+		Context: context.Background(),
+		Run: func(ctx context.Context) error {
+			time.Sleep(100 * time.Millisecond) // outlives waitCtx
+			done <- ctx.Err()
+			return nil
+		},
+	})
+	cancel()
+
+	fmt.Println("submitted:", err)
+	fmt.Println("job context error:", <-done)
+	// Output:
+	// submitted: <nil>
+	// job context error: <nil>
+}

@@ -54,16 +54,60 @@ err := pool.SubmitTask(ctx, adaptivepool.Task{
 |---|---|---|
 | `ID` | Finding one specific task: order ID, request ID, message ID | Logs (`task_id`), `TaskResult.ID` |
 | `Kind` | Grouping tasks of the same type | Metric label `kind`, logs, `TaskResult.Kind` |
+| `Context` | The context the job runs with, if different from the submit context | Passed to `Run`; drives retry cancellation |
 
 > **Keep `Kind` bounded.** Every distinct kind creates new Prometheus series.
 > Use a fixed set like `"send_email"` or `"resize_image"`, never a user ID or
 > URL. Tasks without a kind are reported as `kind="default"`.
 
-> **The submit context is also the execution context.** The `ctx` passed to
-> `Submit`/`SubmitTask` controls how long Submit waits for queue space *and*
-> is the context the job runs with. Don't cancel it right after Submit returns
-> (for example with `defer cancel()` around a short timeout), or the job will
-> start with a cancelled context and finish as `canceled`.
+### Submit context vs execution context
+
+The `ctx` passed to `Submit`/`SubmitTask` bounds **how long to wait for queue
+space** under backpressure. By default it is also **the context the job runs
+with**. Those are often different lifetimes:
+
+| You want | Use |
+|---|---|
+| The job to stop when the caller gives up (request-scoped work) | `Submit(ctx, job)`: one context for both |
+| A bounded wait for a slot, without that deadline cancelling the job | `Task.Context` |
+| The job to outlive the request that submitted it | `Task.Context: context.WithoutCancel(r.Context())` |
+
+```go
+func handler(w http.ResponseWriter, r *http.Request) {
+    // Wait at most 50ms for a slot; respond 503 if the pool is saturated
+    submitCtx, cancel := context.WithTimeout(r.Context(), 50*time.Millisecond)
+    defer cancel()
+
+    err := pool.SubmitTask(submitCtx, adaptivepool.Task{
+        Kind:    "send_email",
+        Context: context.WithoutCancel(r.Context()), // keeps trace IDs, not cancellation
+        Run:     sendEmail,
+    })
+    if errors.Is(err, adaptivepool.ErrTimeout) {
+        http.Error(w, "busy, retry later", http.StatusServiceUnavailable)
+        return
+    }
+    w.WriteHeader(http.StatusAccepted)
+}
+```
+
+Without `Task.Context`, `defer cancel()` here would cancel the job as soon as
+the handler returns, and the job would finish as `canceled`.
+
+`WithoutCancel` keeps the values (trace and request IDs) but drops the
+deadline. To bound the job itself, apply the timeout inside `Run`, where the
+`cancel` can be deferred:
+
+```go
+Run: func(ctx context.Context) error {
+    ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+    defer cancel()
+    return sendEmail(ctx)
+},
+```
+
+If the queue has space, `Submit` enqueues immediately even when its context
+is already done, so `context.WithTimeout(ctx, 0)` means "don't wait if full".
 
 `Submit` and `SubmitTask` return `ErrNilJob` if `Run` is nil.
 
@@ -381,8 +425,9 @@ timeout in another), so an attempt count alone can't bound the total cost.
 
 You don't configure this; it always applies:
 
-- If the job's context is done after a failure, retrying stops immediately
-  and the reason is `ctx.Err()`.
+- If the job's context (`Task.Context` when set, otherwise the submit
+  context) is done after a failure, retrying stops immediately and the
+  reason is `ctx.Err()`.
 - A backoff wait ends the moment the context is cancelled.
 - Context errors are therefore never retried pointlessly. The status is
   `canceled`.

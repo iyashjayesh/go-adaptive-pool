@@ -72,6 +72,8 @@ func BenchmarkExecuteJob(b *testing.B) {
 
 // TestExecuteJobAllocations guards the hot path: apart from the final
 // *RetryError when retrying gives up, executing a job must not allocate.
+// Retry cases use zero-length waits; a real wait adds the timer allocated
+// by Clock.After, which is outside what this test covers.
 func TestExecuteJobAllocations(t *testing.T) {
 	if raceEnabled {
 		t.Skip("the race detector adds allocations")

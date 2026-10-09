@@ -134,6 +134,8 @@ func nonNegative(field string, d time.Duration) error {
 }
 
 // Clock abstracts time so retry timing can be tested deterministically.
+// The system clock's After uses time.After, which allocates a timer for
+// each non-zero backoff wait.
 type Clock interface {
 	Now() time.Time
 	After(d time.Duration) <-chan time.Time

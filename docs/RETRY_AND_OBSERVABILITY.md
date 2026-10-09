@@ -25,9 +25,13 @@ The pool is meant to be lightweight, so every feature here follows a few rules:
   don't start goroutines or timers in the background.
 - **You only pay for what you enable.** With retries, the hook and debug
   logging all turned off, the execution path costs what it did before.
-- **The hot path doesn't allocate.** Successful jobs, failed jobs and retried
-  jobs all run with zero heap allocations. The only exception is the
-  `*RetryError` returned when retrying gives up. A test enforces this.
+- **The hot path doesn't allocate.** Successful and failed jobs run with zero
+  heap allocations, and so does the retry logic itself. There are two
+  exceptions: the `*RetryError` returned when retrying gives up, and each
+  backoff wait longer than zero, which creates a timer (3 allocations, 248
+  bytes) through `time.After`. That wait then lasts milliseconds, so the
+  allocation is negligible next to it. A test enforces the zero-allocation
+  paths.
 - **Observability can't blow up memory.** Metric labels only use bounded
   values (pool name, task kind, status, rejection reason). Unique IDs only
   appear in logs and in the hook.
@@ -589,10 +593,17 @@ The dashboard has a pool selector and panels for:
 | Prometheus enabled | ~125 | 0 |
 | Retry enabled, job succeeds | ~125 | 0 |
 | One retry (zero delay), then success | ~170 | 0 |
+| One retry with a real wait, then success | the wait itself | 3 (248 B, the `time.After` timer) |
 | `OnTaskDone` hook set | ~127 | 0 |
 | Job fails, retries disabled | ~127 | 0 |
 | Retries exhausted | ~200 | 1 (the returned `*RetryError`) |
 
-`TestExecuteJobAllocations` fails the build if any of these paths starts
-allocating. For comparison, an idle 1ms timer or a single small `log` line
-costs more than the whole execution overhead above.
+`TestExecuteJobAllocations` fails the build if any zero-allocation path starts
+allocating.
+
+**Why the timer allocation is left alone.** It could be removed by keeping one
+reusable timer per worker and calling `Reset` before each wait. That would need
+the `Clock` interface to expose timers instead of `After`, plus extra plumbing
+from each worker into the retry engine. A real backoff wait lasts at least
+milliseconds, so 248 bytes per retry costs nothing measurable, and the extra
+complexity isn't worth it.

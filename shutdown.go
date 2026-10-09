@@ -3,6 +3,7 @@ package adaptivepool
 import (
 	"context"
 	"log/slog"
+	"runtime"
 	"time"
 )
 
@@ -13,14 +14,20 @@ func (p *pool) Shutdown(ctx context.Context) error {
 	p.state.shutdownOnce.Do(func() {
 		p.logger.Info("initiating pool shutdown")
 
-		// Transition to draining state
+		// Transition to draining state and wake Submits blocked on a full queue
 		p.state.setShutdownState(shutdownStateDraining)
+		close(p.state.closing)
 
 		// Stop the dispatcher
 		p.dispatcherCancel()
 		p.dispatcherWg.Wait()
 
-		// Close the job queue to prevent new submissions
+		// Closing the queue is only safe once no Submit can still send to it.
+		// In-flight calls either finish their send or return via closing, so
+		// this wait is brief.
+		for p.state.submitters.Load() > 0 {
+			runtime.Gosched()
+		}
 		close(p.state.jobQueue)
 
 		// Wait for workers to finish with timeout

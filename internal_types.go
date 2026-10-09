@@ -38,11 +38,15 @@ type poolState struct {
 	workerCount atomic.Int32
 	busyWorkers atomic.Int32
 
-	// Shutdown coordination
+	// Shutdown coordination. The queue is only closed once no Submit call
+	// is in flight (submitters == 0); closing wakes Submits blocked on a full
+	// queue so they return instead of sending on a closed channel.
 	shutdownOnce  sync.Once
 	shutdownState atomic.Int32
 	shutdownDone  chan struct{}
+	closing       chan struct{} // closed when Shutdown starts
 	forceStop     chan struct{} // closed when Shutdown's context expires
+	submitters    atomic.Int64
 
 	// Scaling coordination
 	scalingMu   sync.Mutex
@@ -54,6 +58,7 @@ func newPoolState(queueSize int) *poolState {
 	ps := &poolState{
 		jobQueue:     make(chan jobWrapper, queueSize),
 		shutdownDone: make(chan struct{}),
+		closing:      make(chan struct{}),
 		forceStop:    make(chan struct{}),
 	}
 	ps.shutdownState.Store(int32(shutdownStateRunning))

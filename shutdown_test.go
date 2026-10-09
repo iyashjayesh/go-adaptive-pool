@@ -2,6 +2,7 @@ package adaptivepool
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -189,5 +190,70 @@ func TestShutdownConcurrent(t *testing.T) {
 	for i := 0; i < numGoroutines; i++ {
 		err := <-errors
 		assert.NoError(t, err)
+	}
+}
+
+// Regression: a Submit blocked on a full queue panicked with "send on
+// closed channel" when Shutdown closed the queue.
+func TestShutdownWakesBlockedSubmit(t *testing.T) {
+	p, err := New(WithMinWorkers(1), WithMaxWorkers(1), WithQueueSize(1), WithLogger(discardLogger()))
+	require.NoError(t, err)
+
+	release := make(chan struct{})
+	slow := func(context.Context) error { //nolint:unparam
+		<-release
+		return nil
+	}
+	require.NoError(t, p.Submit(context.Background(), slow)) // occupies the worker
+	require.Eventually(t, func() bool { return p.Metrics().BusyWorkers() == 1 }, time.Second, time.Millisecond)
+	require.NoError(t, p.Submit(context.Background(), slow)) // fills the queue
+
+	blocked := make(chan error, 1)
+	go func() { blocked <- p.Submit(context.Background(), slow) }()
+	time.Sleep(20 * time.Millisecond) // let it block on the full queue
+
+	shutdownDone := make(chan error, 1)
+	go func() { shutdownDone <- p.Shutdown(context.Background()) }()
+
+	select {
+	case err := <-blocked:
+		assert.ErrorIs(t, err, ErrPoolShutdown)
+	case <-time.After(2 * time.Second):
+		t.Fatal("blocked Submit was not woken by Shutdown")
+	}
+	close(release)
+	require.NoError(t, <-shutdownDone)
+}
+
+// Regression: Submits racing with Shutdown must never panic, and every job
+// whose Submit returned nil must still run during the graceful drain.
+func TestSubmitConcurrentWithShutdown(t *testing.T) {
+	for range 20 {
+		p, err := New(WithMinWorkers(2), WithMaxWorkers(4), WithQueueSize(8), WithLogger(discardLogger()))
+		require.NoError(t, err)
+
+		var accepted, executed atomic.Int64
+		job := func(context.Context) error { //nolint:unparam
+			executed.Add(1)
+			return nil
+		}
+
+		var submitters sync.WaitGroup
+		for range 16 {
+			submitters.Go(func() {
+				for {
+					if err := p.Submit(context.Background(), job); err != nil {
+						assert.ErrorIs(t, err, ErrPoolShutdown)
+						return
+					}
+					accepted.Add(1)
+				}
+			})
+		}
+
+		time.Sleep(5 * time.Millisecond)
+		require.NoError(t, p.Shutdown(context.Background()))
+		submitters.Wait()
+		assert.Equal(t, accepted.Load(), executed.Load(), "accepted jobs must not be dropped")
 	}
 }

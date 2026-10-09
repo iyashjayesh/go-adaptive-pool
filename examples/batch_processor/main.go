@@ -103,9 +103,10 @@ func main() {
 			}
 		}
 
-		// Submit with short timeout to demonstrate backpressure
+		// Wait at most 100ms for capacity to demonstrate backpressure. The job
+		// runs on ctx, so cancelling the wait context below doesn't cancel it.
 		SubmitCtx, SubmitCancel := context.WithTimeout(ctx, 100*time.Millisecond)
-		if err := pool.Submit(SubmitCtx, job); err != nil {
+		if err := pool.SubmitTask(SubmitCtx, adaptivepool.Task{Context: ctx, Run: job}); err != nil {
 			failed.Add(1)
 			if err != context.Canceled {
 				log.Printf("Task %d failed to Submit: %v", taskID, err)

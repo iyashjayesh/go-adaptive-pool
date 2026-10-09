@@ -107,11 +107,18 @@ func handleSubmit(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Submit with timeout
+	// Wait at most 5s for capacity. The job gets its own context: this
+	// handler returns (and cancels ctx) as soon as the job is accepted, and
+	// the request context ends with it. WithoutCancel keeps request values.
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	if err := pool.Submit(ctx, job); err != nil {
+	err := pool.SubmitTask(ctx, adaptivepool.Task{
+		Kind:    "http_job",
+		Context: context.WithoutCancel(r.Context()),
+		Run:     job,
+	})
+	if err != nil {
 		if err == adaptivepool.ErrPoolShutdown {
 			http.Error(w, "Service is shutting down", http.StatusServiceUnavailable)
 			return

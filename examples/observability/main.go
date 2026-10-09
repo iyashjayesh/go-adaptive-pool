@@ -200,9 +200,8 @@ func handleRequest(ctx context.Context, pool adaptivepool.Pool, id int) {
 // trackEvents submits best-effort telemetry: if no worker slot frees up
 // within 5ms the event is dropped (rejected, reason="timeout").
 //
-// The submit context is also the job's context, so a short submit deadline
-// would cancel the job too. The job therefore ignores its context and uses
-// its own; the deadline only bounds the wait for a queue slot.
+// Task.Context gives the job its own context, so the 5ms deadline only
+// bounds the wait for a queue slot and doesn't cancel accepted events.
 func trackEvents(ctx context.Context, pool adaptivepool.Pool) {
 	for id := 1; ; id++ {
 		select {
@@ -212,10 +211,11 @@ func trackEvents(ctx context.Context, pool adaptivepool.Pool) {
 		}
 		submitCtx, cancel := context.WithTimeout(ctx, 5*time.Millisecond)
 		_ = pool.SubmitTask(submitCtx, adaptivepool.Task{
-			ID:   fmt.Sprintf("event-%d", id),
-			Kind: "track_event",
-			Run: func(context.Context) error {
-				return work(context.Background(), 5*time.Millisecond)
+			ID:      fmt.Sprintf("event-%d", id),
+			Kind:    "track_event",
+			Context: context.Background(),
+			Run: func(ctx context.Context) error {
+				return work(ctx, 5*time.Millisecond)
 			},
 		})
 		cancel()

@@ -35,7 +35,17 @@ func (p *pool) SubmitTask(ctx context.Context, task Task) error {
 		kind:        task.Kind,
 	}
 
-	// Try to enqueue the job with backpressure
+	// Enqueue immediately if there is space. Without this, a context that is
+	// already done (e.g. a zero timeout meaning "don't wait") would race the
+	// send in the select below and be rejected at random even with room.
+	select {
+	case p.state.jobQueue <- wrapper:
+		p.metrics.recordJobSubmitted(task.Kind)
+		return nil
+	default:
+	}
+
+	// Queue is full: wait for space with backpressure
 	select {
 	case p.state.jobQueue <- wrapper:
 		p.metrics.recordJobSubmitted(task.Kind)

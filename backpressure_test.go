@@ -225,3 +225,33 @@ func TestConcurrentSubmissions(t *testing.T) {
 
 	assert.Equal(t, int64(expectedJobs), pool.Metrics().JobsProcessed())
 }
+
+// Regression: with an already-expired context, Submit raced the queue send
+// against ctx.Done() and rejected about half of submissions at random even
+// though the queue had space.
+func TestSubmitPrefersQueueSpaceOverDoneContext(t *testing.T) {
+	p := newTestPool(t, WithMinWorkers(1), WithMaxWorkers(1), WithQueueSize(1000), WithLogger(discardLogger()))
+
+	release := make(chan struct{})
+	defer close(release)
+	job := func(context.Context) error { //nolint:unparam
+		<-release
+		return nil
+	}
+
+	for i := range 1000 {
+		ctx, cancel := context.WithTimeout(context.Background(), 0)
+		err := p.Submit(ctx, job)
+		cancel()
+		require.NoError(t, err, "submit %d rejected with queue space available", i)
+	}
+
+	// The worker holds one job; refill its slot so the queue is full
+	require.Eventually(t, func() bool { return p.Metrics().BusyWorkers() == 1 }, time.Second, time.Millisecond)
+	require.NoError(t, p.Submit(context.Background(), job))
+
+	// Once the queue is full, a done context rejects immediately
+	ctx, cancel := context.WithTimeout(context.Background(), 0)
+	defer cancel()
+	assert.ErrorIs(t, p.Submit(ctx, job), ErrTimeout)
+}

@@ -59,8 +59,8 @@ func (p *pool) Shutdown(ctx context.Context) error {
 			}
 		}
 
-		if p.config.registerer != nil {
-			p.metrics.unregister(p.config.registerer)
+		if a, ok := p.metrics.rec.(attacher); ok {
+			a.Detach()
 		}
 
 		// Transition to terminated state

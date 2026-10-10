@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // benchPool returns the concrete pool so executeJob can be measured in
@@ -48,7 +50,7 @@ func executeCases() []struct {
 		job  Job
 	}{
 		{"metrics-off", []Option{WithMetricsEnabled(false)}, ok},
-		{"metrics-on", nil, ok},
+		{"metrics-on", []Option{WithPrometheusRegisterer(prometheus.NewRegistry())}, ok},
 		{"retry-success", []Option{noWait}, ok},
 		{"retry-one-failure", []Option{noWait}, failOnce()},
 		{"hook", []Option{WithOnTaskDone(func(TaskResult) {})}, ok},

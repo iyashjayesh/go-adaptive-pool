@@ -59,10 +59,15 @@ func New(options ...Option) (Pool, error) {
 	// creating pool state
 	state := newPoolState(config.queueSize)
 
-	metrics := newMetrics(state, config)
-	if config.registerer != nil {
-		if err := metrics.register(config.registerer); err != nil {
-			return nil, fmt.Errorf("registering metrics: %w", err)
+	var rec recorder
+	if config.metricsEnabled && config.registerer != nil {
+		rec = newPromRecorder(config.registerer)
+	}
+	metrics := newMetrics(state, rec)
+	if a, ok := rec.(attacher); ok {
+		info := poolInfo{Name: config.name, MinWorkers: config.minWorkers, MaxWorkers: config.maxWorkers, QueueSize: config.queueSize}
+		if err := a.Attach(info, metrics); err != nil {
+			return nil, fmt.Errorf("attaching metrics recorder: %w", err)
 		}
 	}
 
@@ -218,6 +223,6 @@ func (p *pool) scaleUp() {
 	}
 
 	p.state.lastScaleUp = time.Now()
-	p.metrics.recordScaleUp()
+	p.metrics.recordScaleUp(toAdd)
 	p.logger.Info("scaled up", slog.Int("added", toAdd), slog.Int("workers", p.state.getWorkerCount()))
 }

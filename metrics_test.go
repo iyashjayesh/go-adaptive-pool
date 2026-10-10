@@ -98,13 +98,13 @@ func TestPrometheusRejectionReasons(t *testing.T) {
 	require.NoError(t, err)
 
 	// Collect from the pool's own collectors since Shutdown unregisters them
-	m := p.Metrics().(*metrics)
+	rec := p.Metrics().(*metrics).rec.(*promRecorder)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	require.NoError(t, p.Shutdown(ctx))
 
 	assert.ErrorIs(t, p.SubmitTask(context.Background(), Task{Kind: "email", Run: func(context.Context) error { return nil }}), ErrPoolShutdown)
-	assert.InDelta(t, 1, testutil.ToFloat64(m.promJobsRejected.WithLabelValues("email", rejectShutdown)), 0)
+	assert.InDelta(t, 1, testutil.ToFloat64(rec.jobsRejected.WithLabelValues("email", string(rejectShutdown))), 0)
 	assert.Equal(t, int64(1), p.Metrics().JobsRejected())
 }
 

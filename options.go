@@ -4,8 +4,6 @@ import (
 	"log/slog"
 	"runtime"
 	"time"
-
-	"github.com/prometheus/client_golang/prometheus"
 )
 
 // Config holds the configuration for the pool
@@ -15,11 +13,10 @@ type Config struct {
 	queueSize             int
 	scaleUpThreshold      float64
 	scaleDownIdleDuration time.Duration
-	metricsEnabled        bool
 	scaleCooldown         time.Duration
 	name                  string
 	logger                *slog.Logger
-	registerer            prometheus.Registerer
+	recorder              Recorder
 	onTaskDone            func(TaskResult)
 	retry                 *RetryPolicy
 }
@@ -67,14 +64,6 @@ func WithScaleDownIdleDuration(d time.Duration) Option {
 	}
 }
 
-// WithMetricsEnabled enables or disables metrics collection
-// Default: true
-func WithMetricsEnabled(enabled bool) Option {
-	return func(c *Config) {
-		c.metricsEnabled = enabled
-	}
-}
-
 // WithScaleCooldown sets the minimum duration between scaling operations
 // Default: 5s
 func WithScaleCooldown(d time.Duration) Option {
@@ -84,21 +73,12 @@ func WithScaleCooldown(d time.Duration) Option {
 }
 
 // WithName names the pool. The name is attached to every log record and
-// metric so multiple pools in one process can be told apart.
+// passed to recorders in PoolInfo, so multiple pools in one process can be
+// told apart.
 // Default: "" (unnamed)
 func WithName(name string) Option {
 	return func(c *Config) {
 		c.name = name
-	}
-}
-
-// WithPrometheusRegisterer registers the pool's Prometheus metrics with reg
-// (e.g. prometheus.DefaultRegisterer). Metrics are unregistered on Shutdown.
-// Use WithName to give each pool sharing a registry a distinct "pool" label.
-// Default: nil (metrics are tracked but not registered)
-func WithPrometheusRegisterer(reg prometheus.Registerer) Option {
-	return func(c *Config) {
-		c.registerer = reg
 	}
 }
 
@@ -130,7 +110,6 @@ func defaultConfig() *Config {
 		queueSize:             1000,
 		scaleUpThreshold:      0.7,
 		scaleDownIdleDuration: 30 * time.Second,
-		metricsEnabled:        true,
 		scaleCooldown:         5 * time.Second,
 	}
 }

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	adaptivepool "github.com/iyashjayesh/go-adaptive-pool"
+	"github.com/iyashjayesh/go-adaptive-pool/promrecorder"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
@@ -46,7 +47,7 @@ func main() {
 		adaptivepool.WithScaleDownIdleDuration(10*time.Second),
 		adaptivepool.WithScaleCooldown(time.Second), // react quickly to the 30s bursts
 		adaptivepool.WithLogger(logger),
-		adaptivepool.WithPrometheusRegisterer(prometheus.DefaultRegisterer),
+		adaptivepool.WithRecorder(promrecorder.New(prometheus.DefaultRegisterer)),
 		adaptivepool.WithRetry(adaptivepool.RetryPolicy{
 			MaxAttempts:    4,
 			Backoff:        adaptivepool.ExponentialBackoff{Base: 50 * time.Millisecond, Multiplier: 2},
@@ -75,7 +76,7 @@ func main() {
 		adaptivepool.WithQueueSize(8), // ~80ms of work: queued requests still meet their deadline
 		adaptivepool.WithScaleCooldown(time.Second),
 		adaptivepool.WithLogger(logger),
-		adaptivepool.WithPrometheusRegisterer(prometheus.DefaultRegisterer),
+		adaptivepool.WithRecorder(promrecorder.New(prometheus.DefaultRegisterer)),
 	)
 	if err != nil {
 		logger.Error("creating pool", slog.Any("err", err))

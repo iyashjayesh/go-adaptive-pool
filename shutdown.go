@@ -59,7 +59,7 @@ func (p *pool) Shutdown(ctx context.Context) error {
 			}
 		}
 
-		if a, ok := p.metrics.rec.(attacher); ok {
+		if a, ok := p.metrics.rec.(Attacher); ok {
 			a.Detach()
 		}
 

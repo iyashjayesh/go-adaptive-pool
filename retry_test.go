@@ -4,13 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -386,12 +383,12 @@ func TestRetryErrorLimitsValidation(t *testing.T) {
 
 func TestPoolRetryObservability(t *testing.T) {
 	var rec logRecorder
-	reg := prometheus.NewRegistry()
+	events := &fakeRecorder{}
 	results := make(chan TaskResult, 2)
 	p := newTestPool(t,
 		WithMinWorkers(1), WithMaxWorkers(1),
 		WithLogger(rec.logger()),
-		WithPrometheusRegisterer(reg),
+		WithRecorder(events),
 		WithRetry(RetryPolicy{MaxAttempts: 3, Backoff: ConstantBackoff{Delay: time.Millisecond}}),
 		WithOnTaskDone(func(r TaskResult) { results <- r }),
 	)
@@ -421,20 +418,10 @@ func TestPoolRetryObservability(t *testing.T) {
 	assert.Equal(t, int64(3), p.Metrics().RetryAttempts())
 	assert.Equal(t, int64(1), p.Metrics().JobsFailed())
 
-	expected := `
-# HELP adaptivepool_jobs_completed_total Jobs that finished executing, by final status
-# TYPE adaptivepool_jobs_completed_total counter
-adaptivepool_jobs_completed_total{kind="sync",status="retries_exhausted"} 1
-adaptivepool_jobs_completed_total{kind="sync",status="success"} 1
-# HELP adaptivepool_jobs_retried_total Jobs that needed at least one retry
-# TYPE adaptivepool_jobs_retried_total counter
-adaptivepool_jobs_retried_total{kind="sync"} 2
-# HELP adaptivepool_retry_attempts_total Retries performed across all jobs
-# TYPE adaptivepool_retry_attempts_total counter
-adaptivepool_retry_attempts_total{kind="sync"} 3
-`
-	require.NoError(t, testutil.GatherAndCompare(reg, strings.NewReader(expected),
-		"adaptivepool_jobs_completed_total", "adaptivepool_jobs_retried_total", "adaptivepool_retry_attempts_total"))
+	assert.ElementsMatch(t, []completedEvent{
+		{kind: "sync", status: StatusSuccess, attempts: 2},
+		{kind: "sync", status: StatusRetriesExhausted, attempts: 3},
+	}, events.completedEvents())
 
 	retries := rec.records("retrying task")
 	require.Len(t, retries, 3)

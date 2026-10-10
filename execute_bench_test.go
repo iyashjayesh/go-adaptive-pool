@@ -5,8 +5,6 @@ import (
 	"errors"
 	"testing"
 	"time"
-
-	"github.com/prometheus/client_golang/prometheus"
 )
 
 // benchPool returns the concrete pool so executeJob can be measured in
@@ -27,6 +25,14 @@ func benchPool(tb testing.TB, opts ...Option) *pool {
 }
 
 var errBench = errors.New("bench")
+
+// noopRecorder measures the cost of dispatching events to a recorder.
+type noopRecorder struct{}
+
+func (noopRecorder) JobSubmitted(string)                                            {}
+func (noopRecorder) JobRejected(string, RejectReason)                               {}
+func (noopRecorder) JobCompleted(string, Status, int, time.Duration, time.Duration) {}
+func (noopRecorder) ScaledUp(int)                                                   {}
 
 func executeCases() []struct {
 	name string
@@ -49,8 +55,8 @@ func executeCases() []struct {
 		opts []Option
 		job  Job
 	}{
-		{"metrics-off", []Option{WithMetricsEnabled(false)}, ok},
-		{"metrics-on", []Option{WithPrometheusRegisterer(prometheus.NewRegistry())}, ok},
+		{"no-recorder", nil, ok},
+		{"recorder", []Option{WithRecorder(noopRecorder{})}, ok},
 		{"retry-success", []Option{noWait}, ok},
 		{"retry-one-failure", []Option{noWait}, failOnce()},
 		{"hook", []Option{WithOnTaskDone(func(TaskResult) {})}, ok},

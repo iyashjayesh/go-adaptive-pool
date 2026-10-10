@@ -59,13 +59,9 @@ func New(options ...Option) (Pool, error) {
 	// creating pool state
 	state := newPoolState(config.queueSize)
 
-	var rec recorder
-	if config.metricsEnabled && config.registerer != nil {
-		rec = newPromRecorder(config.registerer)
-	}
-	metrics := newMetrics(state, rec)
-	if a, ok := rec.(attacher); ok {
-		info := poolInfo{Name: config.name, MinWorkers: config.minWorkers, MaxWorkers: config.maxWorkers, QueueSize: config.queueSize}
+	metrics := newMetrics(state, config.recorder)
+	if a, ok := config.recorder.(Attacher); ok {
+		info := PoolInfo{Name: config.name, MinWorkers: config.minWorkers, MaxWorkers: config.maxWorkers, QueueSize: config.queueSize}
 		if err := a.Attach(info, metrics); err != nil {
 			return nil, fmt.Errorf("attaching metrics recorder: %w", err)
 		}

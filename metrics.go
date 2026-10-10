@@ -52,10 +52,10 @@ type metrics struct {
 	// Reference to pool state for current values
 	state *poolState
 
-	rec recorder // nil when no recorder is configured
+	rec Recorder // nil when no recorder is configured
 }
 
-func newMetrics(state *poolState, rec recorder) *metrics {
+func newMetrics(state *poolState, rec Recorder) *metrics {
 	return &metrics{state: state, rec: rec}
 }
 
@@ -124,7 +124,7 @@ func (m *metrics) recordJobSubmitted(kind string) {
 }
 
 // recordJobRejected records a rejected job
-func (m *metrics) recordJobRejected(kind string, reason rejectReason) {
+func (m *metrics) recordJobRejected(kind string, reason RejectReason) {
 	m.jobsRejected.Add(1)
 	if m.rec != nil {
 		m.rec.JobRejected(normalizeKind(kind), reason)

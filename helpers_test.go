@@ -59,3 +59,66 @@ func (r *logRecorder) records(msg string) []map[string]any {
 	}
 	return out
 }
+
+// fakeRecorder captures recorder events in memory.
+type fakeRecorder struct {
+	mu        sync.Mutex
+	submitted []string
+	rejected  []string // kind/reason
+	completed []completedEvent
+	scaledUp  []int
+
+	attachErr error
+	info      *PoolInfo
+	stats     Metrics
+	detached  bool
+}
+
+type completedEvent struct {
+	kind     string
+	status   Status
+	attempts int
+}
+
+func (r *fakeRecorder) JobSubmitted(kind string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.submitted = append(r.submitted, kind)
+}
+
+func (r *fakeRecorder) JobRejected(kind string, reason RejectReason) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.rejected = append(r.rejected, kind+"/"+string(reason))
+}
+
+func (r *fakeRecorder) JobCompleted(kind string, status Status, attempts int, _, _ time.Duration) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.completed = append(r.completed, completedEvent{kind, status, attempts})
+}
+
+func (r *fakeRecorder) ScaledUp(added int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.scaledUp = append(r.scaledUp, added)
+}
+
+func (r *fakeRecorder) Attach(info PoolInfo, stats Metrics) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.info, r.stats = &info, stats
+	return r.attachErr
+}
+
+func (r *fakeRecorder) Detach() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.detached = true
+}
+
+func (r *fakeRecorder) completedEvents() []completedEvent {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]completedEvent(nil), r.completed...)
+}

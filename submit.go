@@ -23,7 +23,7 @@ func (p *pool) SubmitTask(ctx context.Context, task Task) error {
 	defer p.state.submitters.Add(-1)
 
 	if p.state.isShutdown() {
-		p.metrics.recordJobRejected(task.Kind, rejectShutdown)
+		p.metrics.recordJobRejected(task.Kind, RejectShutdown)
 		return ErrPoolShutdown
 	}
 
@@ -56,16 +56,16 @@ func (p *pool) SubmitTask(ctx context.Context, task Task) error {
 		return nil
 
 	case <-p.state.closing:
-		p.metrics.recordJobRejected(task.Kind, rejectShutdown)
+		p.metrics.recordJobRejected(task.Kind, RejectShutdown)
 		return ErrPoolShutdown
 
 	case <-ctx.Done():
 		// Context cancelled or timed out
 		if ctx.Err() == context.DeadlineExceeded {
-			p.metrics.recordJobRejected(task.Kind, rejectTimeout)
+			p.metrics.recordJobRejected(task.Kind, RejectTimeout)
 			return ErrTimeout
 		}
-		p.metrics.recordJobRejected(task.Kind, rejectCanceled)
+		p.metrics.recordJobRejected(task.Kind, RejectCanceled)
 		return ctx.Err()
 	}
 }

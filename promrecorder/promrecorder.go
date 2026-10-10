@@ -14,6 +14,7 @@ package promrecorder
 
 import (
 	"errors"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -43,6 +44,20 @@ type Recorder struct {
 	jobsRetried   *prometheus.CounterVec   // kind
 	retries       *prometheus.CounterVec   // kind
 	scaleUps      prometheus.Counter
+
+	// kinds caches each kind's resolved series (*kindSeries). Resolving a
+	// labelled series takes a lock inside client_golang; caching it makes
+	// the per-job path a lock-free map read.
+	kinds sync.Map
+}
+
+type kindSeries struct {
+	submitted   prometheus.Counter
+	duration    prometheus.Observer
+	queueWait   prometheus.Observer
+	jobsRetried prometheus.Counter
+	retries     prometheus.Counter
+	completed   sync.Map // adaptivepool.Status -> prometheus.Counter
 }
 
 var (
@@ -134,12 +149,37 @@ func (r *Recorder) Detach() {
 	for _, c := range r.collectors {
 		r.reg.Unregister(c)
 	}
+	r.kinds.Clear()
 	r.attached.Store(false)
+}
+
+// series returns the cached series for kind, resolving them on first use
+func (r *Recorder) series(kind string) *kindSeries {
+	if s, ok := r.kinds.Load(kind); ok {
+		return s.(*kindSeries)
+	}
+	s, _ := r.kinds.LoadOrStore(kind, &kindSeries{
+		submitted:   r.jobsSubmitted.WithLabelValues(kind),
+		duration:    r.jobDuration.WithLabelValues(kind),
+		queueWait:   r.queueWait.WithLabelValues(kind),
+		jobsRetried: r.jobsRetried.WithLabelValues(kind),
+		retries:     r.retries.WithLabelValues(kind),
+	})
+	return s.(*kindSeries)
+}
+
+// completedCounter returns the cached completion counter for kind and status
+func (r *Recorder) completedCounter(s *kindSeries, kind string, status adaptivepool.Status) prometheus.Counter {
+	if c, ok := s.completed.Load(status); ok {
+		return c.(prometheus.Counter)
+	}
+	c, _ := s.completed.LoadOrStore(status, r.jobsCompleted.WithLabelValues(kind, string(status)))
+	return c.(prometheus.Counter)
 }
 
 // JobSubmitted implements adaptivepool.Recorder
 func (r *Recorder) JobSubmitted(kind string) {
-	r.jobsSubmitted.WithLabelValues(kind).Inc()
+	r.series(kind).submitted.Inc()
 }
 
 // JobRejected implements adaptivepool.Recorder
@@ -149,12 +189,13 @@ func (r *Recorder) JobRejected(kind string, reason adaptivepool.RejectReason) {
 
 // JobCompleted implements adaptivepool.Recorder
 func (r *Recorder) JobCompleted(kind string, status adaptivepool.Status, attempts int, queueWait, duration time.Duration) {
-	r.jobsCompleted.WithLabelValues(kind, string(status)).Inc()
-	r.jobDuration.WithLabelValues(kind).Observe(duration.Seconds())
-	r.queueWait.WithLabelValues(kind).Observe(queueWait.Seconds())
+	s := r.series(kind)
+	r.completedCounter(s, kind, status).Inc()
+	s.duration.Observe(duration.Seconds())
+	s.queueWait.Observe(queueWait.Seconds())
 	if retries := attempts - 1; retries > 0 {
-		r.jobsRetried.WithLabelValues(kind).Inc()
-		r.retries.WithLabelValues(kind).Add(float64(retries))
+		s.jobsRetried.Inc()
+		s.retries.Add(float64(retries))
 	}
 }
 

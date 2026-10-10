@@ -205,3 +205,20 @@ func BenchmarkJobCompleted(b *testing.B) {
 		}
 	})
 }
+
+// A reused recorder must not keep series from the previous pool's vectors
+func TestReusedRecorderReportsToNewPool(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	rec := New(reg)
+	run := func() {
+		p, err := adaptivepool.New(adaptivepool.WithRecorder(rec), adaptivepool.WithLogger(slog.New(slog.DiscardHandler)))
+		require.NoError(t, err)
+		require.NoError(t, p.SubmitTask(context.Background(), adaptivepool.Task{Kind: "email", Run: func(context.Context) error { return nil }}))
+		require.Eventually(t, func() bool { return p.Metrics().JobsProcessed() == 1 }, 2*time.Second, time.Millisecond)
+		assert.InDelta(t, 1, testutil.ToFloat64(rec.jobsSubmitted.WithLabelValues("email")), 0)
+		assert.Equal(t, 1, testutil.CollectAndCount(reg, "adaptivepool_jobs_submitted_total"))
+		require.NoError(t, p.Shutdown(context.Background()))
+	}
+	run()
+	run() // counts start from zero against the new pool's collectors
+}

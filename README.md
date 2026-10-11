@@ -20,7 +20,7 @@ It provides:
 - Bounded concurrency via a fixed-size queue
 - Adaptive worker lifecycle. Workers scale up and down based on queue pressure
 - Explicit backpressure. When the queue is full, submissions block or fail fast
-- Observability via Prometheus metrics, structured `slog` logs and an `OnTaskDone` hook
+- Observability via vendor-agnostic metrics (Prometheus and OpenTelemetry recorders included), structured `slog` logs and an `OnTaskDone` hook
 - Inline retries with pluggable backoff, jitter and time budgets
 - Safe shutdown with graceful draining and no goroutine leaks
 
@@ -35,7 +35,8 @@ The `adaptive` behavior here is worker lifecycle adaptation, not request-level c
 - *Explicit backpressure*
     - When overloaded, submissions block or are rejected. The caller must handle it.
 - *Observability*
-    - Prometheus metrics per pool and task kind: workers (active/busy), queue depth and wait, throughput, execution time, failures by reason, retries
+    - Metrics per pool and task kind: workers (active/busy), queue depth and wait, throughput, execution time, failures by reason, retries
+    - No metrics dependency in the core: plug in the bundled Prometheus or OpenTelemetry recorder, or your own
     - Structured `log/slog` logging with task ID, kind, status and attempts
     - `OnTaskDone` hook to react to each task's outcome (dead-letter queues, tracing)
     - Ready-made Grafana dashboard in [`examples/observability`](examples/observability)
@@ -112,14 +113,11 @@ pool, err := adaptivepool.New(
     // Cooldown between scaling operations (default: 5s)
     adaptivepool.WithScaleCooldown(3*time.Second),
     
-    // Enable/disable metrics (default: true)
-    adaptivepool.WithMetricsEnabled(true),
-
-    // Name used as the "pool" log attribute and metric label (default: "")
+    // Name attached to logs and metrics (default: "")
     adaptivepool.WithName("orders"),
 
-    // Register Prometheus metrics (default: not registered)
-    adaptivepool.WithPrometheusRegisterer(prometheus.DefaultRegisterer),
+    // Export metrics: promrecorder, otelrecorder or your own (default: none)
+    adaptivepool.WithRecorder(promrecorder.New(prometheus.DefaultRegisterer)),
 
     // Structured logger (default: slog.Default())
     adaptivepool.WithLogger(slog.New(slog.NewJSONHandler(os.Stdout, nil))),
@@ -196,15 +194,18 @@ pool.SubmitTask(ctx, adaptivepool.Task{
 })
 ```
 
-Expose Prometheus metrics and plot them with the bundled [Grafana dashboard](examples/observability):
+Export metrics through a recorder. With Prometheus, plot them with the bundled [Grafana dashboard](examples/observability):
 
 ```go
+reg := prometheus.NewRegistry()
 pool, _ := adaptivepool.New(
     adaptivepool.WithName("orders"),
-    adaptivepool.WithPrometheusRegisterer(prometheus.DefaultRegisterer),
+    adaptivepool.WithRecorder(promrecorder.New(reg)),
 )
-http.Handle("/metrics", promhttp.Handler())
+http.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
 ```
+
+With OpenTelemetry, use `otelrecorder.New(meterProvider)` instead; any other backend needs a four-method `Recorder`. See [Metrics](docs/RETRY_AND_OBSERVABILITY.md#metrics).
 
 In-process metrics are always available:
 
@@ -368,7 +369,7 @@ Key components:
 |---------|-----------------|------|------|----------|
 | Adaptive Scaling | Yes | No | Yes | No |
 | Explicit Backpressure | Yes | Partial | Partial | No |
-| Prometheus Metrics | Yes | No | No | No |
+| Prometheus / OpenTelemetry Metrics | Yes | No | No | No |
 | Graceful Shutdown | Yes | Yes | Yes | Yes |
 | Context Support | Yes | Partial | Yes | Yes |
 | Zero Global State | Yes | No | Yes | Yes |

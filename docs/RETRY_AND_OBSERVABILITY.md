@@ -1,13 +1,13 @@
 # Retries and Observability
 
-This guide covers task identity, structured logging, Prometheus metrics, the
-`OnTaskDone` hook, and the retry engine. Each feature comes with its use case
+This guide covers task identity, structured logging, metrics (Prometheus,
+OpenTelemetry or your own backend), the `OnTaskDone` hook, and the retry engine. Each feature comes with its use case
 and a code sample.
 
 - [Design goals](#design-goals)
 - [Task identity: `SubmitTask`](#task-identity-submittask)
 - [Structured logging](#structured-logging)
-- [Prometheus metrics](#prometheus-metrics)
+- [Metrics](#metrics)
 - [In-process metrics](#in-process-metrics)
 - [The `OnTaskDone` hook](#the-ontaskdone-hook)
 - [Retries](#retries)
@@ -56,7 +56,8 @@ err := pool.SubmitTask(ctx, adaptivepool.Task{
 | `Kind` | Grouping tasks of the same type | Metric label `kind`, logs, `TaskResult.Kind` |
 | `Context` | The context the job runs with, if different from the submit context | Passed to `Run`; drives retry cancellation |
 
-> **Keep `Kind` bounded.** Every distinct kind creates new Prometheus series.
+> **Keep `Kind` bounded.** Every distinct kind creates new series in your
+> metrics backend.
 > Use a fixed set like `"send_email"` or `"resize_image"`, never a user ID or
 > URL. Tasks without a kind are reported as `kind="default"`.
 
@@ -162,24 +163,42 @@ latencies, and logs for the details of failures.
 
 ---
 
-## Prometheus metrics
+## Metrics
 
-Metrics are only exposed once you register them:
+The pool doesn't depend on any metrics backend. It reports events (job
+submitted, rejected, completed, workers added) to a **`Recorder`**, and you
+pick how they're exported:
+
+| You use | Recorder | Import |
+|---|---|---|
+| Prometheus | `promrecorder.New(registerer)` | `github.com/iyashjayesh/go-adaptive-pool/promrecorder` |
+| OpenTelemetry (and any vendor it exports to: Datadog, New Relic, Grafana Cloud, ...) | `otelrecorder.New(meterProvider)` | `github.com/iyashjayesh/go-adaptive-pool/otelrecorder` |
+| Something else (StatsD, CloudWatch, expvar, ...) | your own `Recorder` | - |
+| Nothing | none: the default | - |
+
+Without a recorder no metrics backend runs at all. The pool's own counters
+behind [`Metrics()`](#in-process-metrics) are always kept.
+
+`WithName` is passed to the recorder, so every metric carries the pool name.
+A recorder serves one pool at a time; create one per pool.
+
+### Prometheus
 
 ```go
+reg := prometheus.NewRegistry() // or prometheus.DefaultRegisterer
 pool, err := adaptivepool.New(
     adaptivepool.WithName("orders"),
-    adaptivepool.WithPrometheusRegisterer(prometheus.DefaultRegisterer),
+    adaptivepool.WithRecorder(promrecorder.New(reg)),
 )
 
-http.Handle("/metrics", promhttp.Handler())
+http.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
 ```
 
-- `WithName` adds a constant `pool` label. Use a distinct name for each pool
-  that shares a registry. A duplicate makes `New` return an error.
-- Metrics are unregistered on `Shutdown`, so a pool with the same name can be
-  created again.
-- With `WithMetricsEnabled(false)`, no Prometheus work happens at all.
+- Collectors are registered when the pool is created and unregistered on
+  `Shutdown`. Pools sharing a registry need distinct names; a duplicate
+  makes `New` return an error.
+- Gauges are evaluated when Prometheus scrapes, so they cost nothing between
+  scrapes.
 
 | Metric | Type | Labels | Answers |
 |---|---|---|---|
@@ -197,8 +216,9 @@ http.Handle("/metrics", promhttp.Handler())
 | `adaptivepool_retry_attempts_total` | counter | `pool`, `kind` | Total retries |
 | `adaptivepool_scale_up_events_total` | counter | `pool` | How often the pool grew |
 
-Gauges are evaluated when Prometheus scrapes, so they cost nothing between
-scrapes. No background ticker is involved.
+Names follow the Prometheus naming conventions (`promlint` reports no
+problems). Once a kind has been seen, its retry counters are exported at
+zero rather than appearing on the first retry.
 
 **Useful queries**
 
@@ -217,11 +237,103 @@ histogram_quantile(0.95, sum by (le, kind) (rate(adaptivepool_job_queue_wait_sec
 adaptivepool_busy_workers / adaptivepool_max_workers
 ```
 
+### OpenTelemetry
+
+```go
+pool, err := adaptivepool.New(
+    adaptivepool.WithName("orders"),
+    adaptivepool.WithRecorder(otelrecorder.New(meterProvider)), // nil uses otel.GetMeterProvider()
+)
+```
+
+Names, units and attributes follow the OpenTelemetry semantic conventions,
+modelled on the database connection pool metrics (`db.client.connection.*`).
+Every metric carries `adaptivepool.pool.name`.
+
+| Metric | Instrument | Unit | Attributes |
+|---|---|---|---|
+| `adaptivepool.worker.count` | UpDownCounter | `{worker}` | `adaptivepool.worker.state` = `idle` or `busy` |
+| `adaptivepool.worker.limit` | UpDownCounter | `{worker}` | |
+| `adaptivepool.worker.min` | UpDownCounter | `{worker}` | |
+| `adaptivepool.queue.usage` | UpDownCounter | `{job}` | |
+| `adaptivepool.queue.limit` | UpDownCounter | `{job}` | |
+| `adaptivepool.job.submissions` | Counter | `{submission}` | `adaptivepool.job.kind` |
+| `adaptivepool.job.rejections` | Counter | `{rejection}` | `adaptivepool.job.kind`, `adaptivepool.rejection.reason` |
+| `adaptivepool.job.duration` | Histogram | `s` | `adaptivepool.job.kind`, `adaptivepool.job.status` |
+| `adaptivepool.job.wait_time` | Histogram | `s` | `adaptivepool.job.kind` |
+| `adaptivepool.job.retries` | Counter | `{retry}` | `adaptivepool.job.kind` |
+| `adaptivepool.worker.scale_ups` | Counter | `{scale_up}` | |
+
+- Completed jobs are counted by the `job.duration` histogram (its count, by
+  status), as `http.server.request.duration` counts requests. There is no
+  separate completions counter.
+- There is no equivalent of Prometheus's `jobs_retried_total`; use
+  `job.retries`.
+- Duration histograms use the bucket boundaries the conventions recommend for
+  seconds (5ms to 10s).
+- Recording costs about 200ns per completed job, mostly inside the
+  OpenTelemetry SDK, versus about 30ns for the Prometheus recorder. Neither
+  allocates.
+
+### Writing your own recorder
+
+Implement four methods. They run on submitting and worker goroutines, so they
+must be safe for concurrent use and fast:
+
+```go
+type statsdRecorder struct{ c *statsd.Client }
+
+func (r statsdRecorder) JobSubmitted(kind string) {
+    r.c.Incr("pool.submitted", []string{"kind:" + kind}, 1)
+}
+func (r statsdRecorder) JobRejected(kind string, reason adaptivepool.RejectReason) {
+    r.c.Incr("pool.rejected", []string{"kind:" + kind, "reason:" + string(reason)}, 1)
+}
+func (r statsdRecorder) JobCompleted(kind string, status adaptivepool.Status, attempts int, wait, d time.Duration) {
+    r.c.Timing("pool.duration", d, []string{"kind:" + kind, "status:" + string(status)}, 1)
+}
+func (r statsdRecorder) ScaledUp(added int) {
+    r.c.Count("pool.scale_up", int64(added), nil, 1)
+}
+
+pool, err := adaptivepool.New(adaptivepool.WithRecorder(statsdRecorder{client}))
+```
+
+Kinds arrive normalized: an empty kind is reported as `"default"`.
+
+To export gauges (queue depth, workers) or register with a backend, also
+implement `Attacher`. `New` calls `Attach` with the pool's `PoolInfo` (name,
+worker limits, queue size) and its live `Metrics()`, which you can read
+whenever your backend collects; an error from `Attach` fails `New`.
+`Shutdown` calls `Detach` when it completes.
+
+### Exposing metrics over HTTP without a backend
+
+`pool.Metrics()` needs no recorder. To serve it as JSON, or through the
+standard library's `/debug/vars`:
+
+```go
+http.HandleFunc("/pool", func(w http.ResponseWriter, _ *http.Request) {
+    m := pool.Metrics()
+    _ = json.NewEncoder(w).Encode(map[string]any{
+        "queue_depth":    m.QueueDepth(),
+        "active_workers": m.ActiveWorkers(),
+        "busy_workers":   m.BusyWorkers(),
+        "jobs_processed": m.JobsProcessed(),
+        "jobs_failed":    m.JobsFailed(),
+        "avg_latency":    m.AvgJobLatency().String(),
+    })
+})
+```
+
+These are pool-wide totals and averages. For per-kind breakdowns or
+histograms, use a recorder.
+
 ---
 
 ## In-process metrics
 
-`pool.Metrics()` is always available, even without Prometheus. It's handy for
+`pool.Metrics()` is always available, with or without a recorder. It's handy for
 health endpoints, tests and logs:
 
 ```go
@@ -634,14 +746,18 @@ The dashboard has a pool selector and panels for:
 
 | Path | ns/op | allocs/op |
 |---|---|---|
-| Metrics disabled | ~50 | 0 |
-| Prometheus enabled | ~125 | 0 |
-| Retry enabled, job succeeds | ~125 | 0 |
-| One retry (zero delay), then success | ~170 | 0 |
+| No recorder | ~50 | 0 |
+| Recorder set (dispatch only, no-op recorder) | ~51 | 0 |
+| Retry enabled, job succeeds | ~54 | 0 |
+| One retry (zero delay), then success | ~65 | 0 |
 | One retry with a real wait, then success | the wait itself | 3 (248 B, the `time.After` timer) |
-| `OnTaskDone` hook set | ~127 | 0 |
-| Job fails, retries disabled | ~127 | 0 |
-| Retries exhausted | ~200 | 1 (the returned `*RetryError`) |
+| `OnTaskDone` hook set | ~58 | 0 |
+| Job fails, retries disabled | ~56 | 0 |
+| Retries exhausted | ~94 | 1 (the returned `*RetryError`) |
+
+A recorder adds its own cost on top: about 30ns per completed job for
+`promrecorder` and about 200ns for `otelrecorder`, both without allocations
+(`BenchmarkJobCompleted` in each package).
 
 `TestExecuteJobAllocations` fails the build if any zero-allocation path starts
 allocating.

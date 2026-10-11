@@ -51,8 +51,8 @@ run-batch:
 	$(GOCMD) run examples/batch_processor/main.go
 
 run-observability:
-	@echo "Running observability example (metrics on :2112/metrics)..."
-	$(GOCMD) run ./examples/observability
+	@echo "Running observability example (metrics on :2112/metrics unless ARGS sets -metrics-addr)..."
+	$(GOCMD) run ./examples/observability $(ARGS)
 
 run-1m-with:
 	@echo "Running 1M RPS simulator WITH adaptivepool..."

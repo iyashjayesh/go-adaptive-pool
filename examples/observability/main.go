@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
@@ -36,6 +37,9 @@ type kind struct {
 }
 
 func main() {
+	metricsAddr := flag.String("metrics-addr", ":2112", "address to serve Prometheus metrics on; keep prometheus.yml's target in sync")
+	flag.Parse()
+
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	var deadLetters atomic.Int64
@@ -84,9 +88,9 @@ func main() {
 	}
 
 	http.Handle("/metrics", promhttp.Handler())
-	server := &http.Server{Addr: ":2112", ReadHeaderTimeout: 3 * time.Second}
+	server := &http.Server{Addr: *metricsAddr, ReadHeaderTimeout: 3 * time.Second}
 	go func() {
-		logger.Info("serving metrics", slog.String("addr", "http://localhost:2112/metrics"))
+		logger.Info("serving metrics", slog.String("addr", *metricsAddr))
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("metrics server", slog.Any("err", err))
 		}

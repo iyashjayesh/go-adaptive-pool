@@ -15,6 +15,14 @@ cd examples/observability && docker compose up
 Open Grafana at http://localhost:3000 (anonymous access is enabled) and pick
 the **Adaptive Pool** dashboard. Prometheus is on http://localhost:9090.
 
+Metrics are exported with `promrecorder`. If port 2112 is taken by another
+process, pick another port and point Prometheus at it:
+
+```bash
+make run-observability ARGS="-metrics-addr=:2113"
+# then change the target in prometheus.yml to host.docker.internal:2113
+```
+
 ## What the load does
 
 | Kind | Behaviour | Shows up as |

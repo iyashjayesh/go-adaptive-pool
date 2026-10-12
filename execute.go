@@ -22,8 +22,7 @@ func (p *pool) executeJob(workerID int, job jobWrapper) {
 	duration := time.Since(start)
 	status := statusOf(err)
 	if status == StatusError && job.ctx.Err() != nil {
-		// Without retries, report failures after the caller gave up the same
-		// way the retry engine does
+		// Match the retry engine: a failure after the context is done is canceled
 		status = StatusCanceled
 	}
 

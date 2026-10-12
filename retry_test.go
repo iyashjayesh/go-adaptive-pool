@@ -227,7 +227,7 @@ func TestRetryMaxElapsedTime(t *testing.T) {
 
 	attempts, err := r.run(context.Background(), func(context.Context) error { return errTransient })
 
-	// waits at 0s, 3s, 6s; a 4th wait would end at 12s > 10s
+	// Waits start at 0s, 3s and 6s; a fourth would end at 12s, past the 10s budget
 	assert.Equal(t, 4, attempts)
 	assert.Len(t, clock.Waits(), 3)
 	assert.ErrorIs(t, err, ErrRetryBudgetExceeded)
@@ -249,8 +249,7 @@ func TestRetryMaxElapsedTimeCountsAttemptDuration(t *testing.T) {
 		return errTransient
 	})
 
-	// 4s run, 1s wait, 4s run = 9s; another 1s wait fits (10s) but the
-	// attempt after it overruns, so the next wait check fails at 14s
+	// Attempts end at 4s, 9s and 14s; the third overruns the 10s budget
 	assert.Equal(t, 3, attempts)
 	assert.ErrorIs(t, err, ErrRetryBudgetExceeded)
 }

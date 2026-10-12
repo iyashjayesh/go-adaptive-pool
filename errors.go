@@ -7,7 +7,8 @@ import (
 )
 
 var (
-	// ErrPoolShutdown is returned when attempting to Submit a job to a shutdown pool
+	// ErrPoolShutdown is returned by Submit once Shutdown has started, and is the
+	// RetryError reason when a forced shutdown aborts a backoff wait
 	ErrPoolShutdown = errors.New("pool is shutdown")
 
 	// ErrQueueFull is not currently returned: Submit waits for space when the
@@ -82,10 +83,9 @@ type permanentError struct {
 func (e *permanentError) Error() string { return e.err.Error() }
 func (e *permanentError) Unwrap() error { return e.err }
 
-// RetryAfter asks the retry engine to wait exactly d before the next attempt
-// instead of the backoff delay, e.g. to honor a rate limiter's Retry-After
-// hint. The wait is still capped by RetryPolicy.MaxDelay and is not
-// jittered. RetryAfter(nil, d) returns nil.
+// RetryAfter makes the next retry wait d instead of the backoff delay, e.g.
+// for a Retry-After header. The wait is capped by MaxDelay and not jittered.
+// RetryAfter(nil, d) returns nil.
 func RetryAfter(err error, d time.Duration) error {
 	if err == nil {
 		return nil
@@ -101,9 +101,8 @@ type retryAfterError struct {
 func (e *retryAfterError) Error() string { return e.err.Error() }
 func (e *retryAfterError) Unwrap() error { return e.err }
 
-// findMarker returns the first error of type T in err's tree. It is used
-// instead of errors.As for the package's own marker types because it needs
-// no pointer target and therefore does not allocate on the failure path.
+// findMarker is errors.As for the package's marker types, without the
+// allocation errors.As needs for its target.
 func findMarker[T error](err error) (T, bool) {
 	var zero T
 	for err != nil {

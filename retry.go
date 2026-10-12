@@ -18,14 +18,11 @@ const (
 )
 
 // RetryPolicy configures how failed jobs are retried. Retries run inline on
-// the worker that executed the job: no re-queueing and no extra goroutines.
+// the worker; errors are retried unless wrapped with Permanent or the job's
+// context is done, and panics are never retried. A job that stops retrying
+// fails with a *RetryError.
 //
-// Every error is retried unless it is wrapped with Permanent or the job's
-// context is done. Panics are never retried. When retrying stops, the job's
-// final error is a *RetryError.
-//
-// During a graceful Shutdown in-flight retries continue, since they are
-// bounded; once Shutdown's context expires, pending backoff waits abort.
+// A graceful Shutdown lets retries finish; a forced one aborts backoff waits.
 type RetryPolicy struct {
 	// MaxAttempts is the maximum number of times a job runs, including the
 	// first attempt. Required and must be >= 1.
@@ -39,16 +36,13 @@ type RetryPolicy struct {
 	// cannot hold a worker for an unbounded time. Zero means no cap.
 	MaxDelay time.Duration
 
-	// Jitter enables full jitter: each wait is drawn uniformly from
-	// [0, delay), where delay is the backoff value after MaxDelay is applied.
-	// It spreads out retries of jobs that failed together, avoiding a
-	// thundering herd on the downstream system.
+	// Jitter draws each wait uniformly from [0, delay), after MaxDelay, to
+	// spread out retries of jobs that failed together.
 	Jitter bool
 
-	// MaxElapsedTime bounds the total time spent on a job across all
-	// attempts and waits. Retrying stops early if the next wait would exceed
-	// it; an attempt already running is never interrupted. Zero means no
-	// budget. Applies in addition to MaxAttempts.
+	// MaxElapsedTime bounds a job's total time across attempts and waits.
+	// Retrying stops if the next wait would exceed it; a running attempt is
+	// never interrupted. Zero means no budget.
 	MaxElapsedTime time.Duration
 
 	// ErrorLimits caps attempts for specific errors. Failures are matched
@@ -120,6 +114,7 @@ func (b ExponentialBackoff) Next(retry int) time.Duration {
 func (b ConstantBackoff) validate() error { return nonNegative("ConstantBackoff.Delay", b.Delay) }
 func (b LinearBackoff) validate() error   { return nonNegative("LinearBackoff.Base", b.Base) }
 func (b ExponentialBackoff) validate() error {
+	// NaN fails the >= 1 check
 	if b.Multiplier != 0 && !(b.Multiplier >= 1 && !math.IsInf(b.Multiplier, 1)) {
 		return fmt.Errorf("%w: ExponentialBackoff.Multiplier must be a finite value >= 1", ErrInvalidConfig)
 	}
@@ -134,8 +129,6 @@ func nonNegative(field string, d time.Duration) error {
 }
 
 // Clock abstracts time so retry timing can be tested deterministically.
-// The system clock's After uses time.After, which allocates a timer for
-// each non-zero backoff wait.
 type Clock interface {
 	Now() time.Time
 	After(d time.Duration) <-chan time.Time

@@ -110,7 +110,22 @@ Run: func(ctx context.Context) error {
 If the queue has space, `Submit` enqueues immediately even when its context
 is already done, so `context.WithTimeout(ctx, 0)` means "don't wait if full".
 
-`Submit` and `SubmitTask` return `ErrNilJob` if `Run` is nil.
+### Submit errors
+
+A nil error means the task was queued; how it ends is reported later through
+logs, metrics and `OnTaskDone`. Otherwise `Submit` and `SubmitTask` return:
+
+| Error | When | Rejection reason |
+|---|---|---|
+| `ErrNilJob` | `Run` is nil | not counted |
+| `ErrPoolShutdown` | `Shutdown` has started, before or while waiting for space | `shutdown` |
+| `ErrTimeout` | The queue stayed full until the submit context's deadline | `timeout` |
+| `context.Canceled` | The queue stayed full until the submit context was cancelled | `canceled` |
+
+`ErrTimeout` doesn't wrap `context.DeadlineExceeded`, so check it with
+`errors.Is(err, adaptivepool.ErrTimeout)`. A full queue never fails
+immediately: `Submit` waits for space, so give it a context with a deadline
+to bound the wait.
 
 ---
 

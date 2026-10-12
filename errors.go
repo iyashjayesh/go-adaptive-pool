@@ -10,7 +10,8 @@ var (
 	// ErrPoolShutdown is returned when attempting to Submit a job to a shutdown pool
 	ErrPoolShutdown = errors.New("pool is shutdown")
 
-	// ErrQueueFull is returned when the job queue is at capacity and cannot accept new jobs
+	// ErrQueueFull is not currently returned: Submit waits for space when the
+	// queue is full, and returns ErrTimeout or the context's error instead
 	ErrQueueFull = errors.New("queue is full")
 
 	// ErrTimeout is returned when a job submission times out

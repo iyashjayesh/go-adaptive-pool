@@ -10,15 +10,19 @@ import (
 
 // Pool represents a worker pool that can execute jobs concurrently
 type Pool interface {
-	// Submit Submits a job to the pool for execution
-	// Returns ErrPoolShutdown if the pool is shutdown
-	// Blocks until the job is enqueued or context is cancelled
+	// Submit submits a job to the pool for execution. If the queue is full
+	// it blocks until there is space, ctx is done or the pool shuts down.
 	// ctx is also the context the job runs with; use SubmitTask with
-	// Task.Context to give the job a different one
+	// Task.Context to give the job a different one.
+	//
+	// It returns ErrNilJob for a nil job, ErrPoolShutdown once Shutdown has
+	// started, ErrTimeout if ctx's deadline passes while waiting, and
+	// context.Canceled if ctx is cancelled while waiting.
 	Submit(ctx context.Context, job Job) error
 
 	// SubmitTask is like Submit but carries a task ID and kind for logs and
-	// metrics, and an optional execution context separate from ctx
+	// metrics, and an optional execution context separate from ctx. It
+	// returns the same errors as Submit.
 	SubmitTask(ctx context.Context, task Task) error
 
 	// Shutdown gracefully shuts down the pool

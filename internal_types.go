@@ -13,10 +13,10 @@ type Job func(ctx context.Context) error
 // jobWrapper wraps a job with metadata for tracking
 type jobWrapper struct {
 	job         Job
-	SubmittedAt time.Time
 	ctx         context.Context
 	taskID      string
 	kind        string
+	submittedAt int64 // nanoseconds since pool.epoch
 }
 
 // shutdownState represents the shutdown state of the pool

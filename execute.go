@@ -26,7 +26,7 @@ func (p *pool) executeJob(workerID int, job jobWrapper) {
 		status = StatusCanceled
 	}
 
-	queueWait := start.Sub(job.SubmittedAt)
+	queueWait := start.Sub(p.epoch) - time.Duration(job.submittedAt)
 
 	p.metrics.recordJobDone(job.kind, status, attempts, queueWait, duration)
 	if err != nil {

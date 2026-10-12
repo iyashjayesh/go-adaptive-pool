@@ -69,7 +69,7 @@ func BenchmarkExecuteJob(b *testing.B) {
 	for _, c := range executeCases() {
 		b.Run(c.name, func(b *testing.B) {
 			p := benchPool(b, c.opts...)
-			w := jobWrapper{job: c.job, ctx: context.Background(), kind: "bench", SubmittedAt: time.Now()}
+			w := jobWrapper{job: c.job, ctx: context.Background(), kind: "bench"}
 			b.ReportAllocs()
 			for b.Loop() {
 				p.executeJob(0, w)
@@ -89,7 +89,7 @@ func TestExecuteJobAllocations(t *testing.T) {
 	for _, c := range executeCases() {
 		t.Run(c.name, func(t *testing.T) {
 			p := benchPool(t, c.opts...)
-			w := jobWrapper{job: c.job, ctx: context.Background(), kind: "bench", SubmittedAt: time.Now()}
+			w := jobWrapper{job: c.job, ctx: context.Background(), kind: "bench"}
 			want := 0.0
 			if c.name == "retry-exhausted" {
 				want = 1

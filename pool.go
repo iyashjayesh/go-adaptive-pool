@@ -44,7 +44,8 @@ type pool struct {
 	state   *poolState
 	metrics *metrics
 	logger  *slog.Logger
-	retrier *retrier // nil when retries are disabled
+	retrier *retrier  // nil when retries are disabled
+	epoch   time.Time // monotonic reference for queue wait timing
 
 	// Dispatcher coordination
 	dispatcherWg     sync.WaitGroup
@@ -84,6 +85,7 @@ func New(options ...Option) (Pool, error) {
 		state:            state,
 		metrics:          metrics,
 		logger:           newLogger(config),
+		epoch:            time.Now(),
 		dispatcherCtx:    dispatcherCtx,
 		dispatcherCancel: dispatcherCancel,
 	}

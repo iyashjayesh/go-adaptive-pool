@@ -42,7 +42,7 @@ func (p *pool) submit(ctx context.Context, task Task, wait bool) error {
 	}
 	wrapper := jobWrapper{
 		job:         task.Run,
-		SubmittedAt: time.Now(),
+		submittedAt: int64(time.Since(p.epoch)),
 		ctx:         runCtx,
 		taskID:      task.ID,
 		kind:        task.Kind,

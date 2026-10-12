@@ -150,9 +150,10 @@ if errors.Is(err, adaptivepool.ErrTimeout) {
 }
 
 // Don't wait at all if the queue is full
-waitCtx, cancel := context.WithTimeout(context.Background(), 0)
-defer cancel()
-err := pool.SubmitTask(waitCtx, adaptivepool.Task{Context: context.Background(), Run: job})
+err := pool.TrySubmit(context.Background(), adaptivepool.Task{Run: job})
+if errors.Is(err, adaptivepool.ErrQueueFull) {
+    // Drop or handle overload
+}
 ```
 
 The context passed to `Submit` is also the context the job runs with, so a

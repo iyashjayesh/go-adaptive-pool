@@ -11,8 +11,7 @@ var (
 	// RetryError reason when a forced shutdown aborts a backoff wait
 	ErrPoolShutdown = errors.New("pool is shutdown")
 
-	// ErrQueueFull is not currently returned: Submit waits for space when the
-	// queue is full, and returns ErrTimeout or the context's error instead
+	// ErrQueueFull is returned by TrySubmit when the queue has no space
 	ErrQueueFull = errors.New("queue is full")
 
 	// ErrTimeout is returned when a job submission times out

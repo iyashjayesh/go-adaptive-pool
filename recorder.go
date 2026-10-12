@@ -14,6 +14,8 @@ const (
 	RejectTimeout RejectReason = "timeout"
 	// RejectCanceled means the submit context was canceled while waiting for queue space
 	RejectCanceled RejectReason = "canceled"
+	// RejectQueueFull means TrySubmit found the queue full
+	RejectQueueFull RejectReason = "queue_full"
 )
 
 // PoolInfo describes the pool a recorder is attached to

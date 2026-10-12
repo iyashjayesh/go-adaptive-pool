@@ -116,3 +116,37 @@ func ExamplePool_SubmitTask() {
 	// submitted: <nil>
 	// job context error: <nil>
 }
+
+func ExamplePool_TrySubmit() {
+	pool, err := adaptivepool.New(
+		adaptivepool.WithMinWorkers(1),
+		adaptivepool.WithMaxWorkers(1),
+		adaptivepool.WithQueueSize(1),
+		adaptivepool.WithLogger(slog.New(slog.DiscardHandler)),
+	)
+	if err != nil {
+		panic(err)
+	}
+	defer func() { _ = pool.Shutdown(context.Background()) }()
+
+	started, release := make(chan struct{}, 1), make(chan struct{})
+	defer close(release)
+	block := func(context.Context) error {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-release
+		return nil
+	}
+
+	ctx := context.Background()
+	_ = pool.TrySubmit(ctx, adaptivepool.Task{Run: block}) // runs on the only worker
+	<-started
+	_ = pool.TrySubmit(ctx, adaptivepool.Task{Run: block}) // fills the queue
+
+	// Drop best-effort work instead of waiting when the pool is saturated
+	err = pool.TrySubmit(ctx, adaptivepool.Task{Kind: "track_event", Run: block})
+	fmt.Println(errors.Is(err, adaptivepool.ErrQueueFull))
+	// Output: true
+}

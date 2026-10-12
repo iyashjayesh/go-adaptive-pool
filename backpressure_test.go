@@ -255,3 +255,55 @@ func TestSubmitPrefersQueueSpaceOverDoneContext(t *testing.T) {
 	defer cancel()
 	assert.ErrorIs(t, p.Submit(ctx, job), ErrTimeout)
 }
+
+func TestTrySubmitQueueFull(t *testing.T) {
+	rec := &fakeRecorder{}
+	p := newTestPool(t, WithMinWorkers(1), WithMaxWorkers(1), WithQueueSize(1), WithLogger(discardLogger()), WithRecorder(rec))
+
+	release := make(chan struct{})
+	defer close(release)
+	block := func(context.Context) error { //nolint:unparam
+		<-release
+		return nil
+	}
+
+	ctx := context.Background()
+	require.NoError(t, p.TrySubmit(ctx, Task{Run: block}))
+	require.Eventually(t, func() bool { return p.Metrics().BusyWorkers() == 1 }, time.Second, time.Millisecond)
+	require.NoError(t, p.TrySubmit(ctx, Task{Run: block}))
+
+	assert.ErrorIs(t, p.TrySubmit(ctx, Task{Kind: "email", Run: block}), ErrQueueFull)
+	assert.Equal(t, int64(1), p.Metrics().JobsRejected())
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	assert.Equal(t, []string{"email/queue_full"}, rec.rejected)
+}
+
+func TestTrySubmitContext(t *testing.T) {
+	p := newTestPool(t, WithLogger(discardLogger()))
+
+	type key struct{}
+	got := make(chan any, 2)
+	run := func(ctx context.Context) error {
+		got <- ctx.Value(key{})
+		return nil
+	}
+
+	ctx := context.WithValue(context.Background(), key{}, "submit")
+	require.NoError(t, p.TrySubmit(ctx, Task{Run: run}))
+	assert.Equal(t, "submit", <-got)
+
+	taskCtx := context.WithValue(context.Background(), key{}, "task")
+	require.NoError(t, p.TrySubmit(ctx, Task{Run: run, Context: taskCtx}))
+	assert.Equal(t, "task", <-got)
+}
+
+func TestTrySubmitErrors(t *testing.T) {
+	p, err := New(WithLogger(discardLogger()))
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	assert.ErrorIs(t, p.TrySubmit(ctx, Task{}), ErrNilJob)
+	require.NoError(t, p.Shutdown(ctx))
+	assert.ErrorIs(t, p.TrySubmit(ctx, Task{Run: func(context.Context) error { return nil }}), ErrPoolShutdown)
+}

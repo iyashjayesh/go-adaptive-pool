@@ -107,13 +107,24 @@ Run: func(ctx context.Context) error {
 },
 ```
 
-If the queue has space, `Submit` enqueues immediately even when its context
-is already done, so `context.WithTimeout(ctx, 0)` means "don't wait if full".
+To never wait, use `TrySubmit`. It returns `ErrQueueFull` when the queue has
+no space, which suits best-effort work such as telemetry:
+
+```go
+err := pool.TrySubmit(ctx, adaptivepool.Task{Kind: "track_event", Run: track})
+if errors.Is(err, adaptivepool.ErrQueueFull) {
+    droppedEvents.Add(1)
+}
+```
+
+Its `ctx` is only the job's context (when `Task.Context` is nil), since there
+is no wait to bound.
 
 ### Submit errors
 
 A nil error means the task was queued; how it ends is reported later through
-logs, metrics and `OnTaskDone`. Otherwise `Submit` and `SubmitTask` return:
+logs, metrics and `OnTaskDone`. Otherwise `Submit`, `SubmitTask` and
+`TrySubmit` return:
 
 | Error | When | Rejection reason |
 |---|---|---|
@@ -121,11 +132,12 @@ logs, metrics and `OnTaskDone`. Otherwise `Submit` and `SubmitTask` return:
 | `ErrPoolShutdown` | `Shutdown` has started, before or while waiting for space | `shutdown` |
 | `ErrTimeout` | The queue stayed full until the submit context's deadline | `timeout` |
 | `context.Canceled` | The queue stayed full until the submit context was cancelled | `canceled` |
+| `ErrQueueFull` | `TrySubmit` only: the queue was full | `queue_full` |
 
 `ErrTimeout` doesn't wrap `context.DeadlineExceeded`, so check it with
-`errors.Is(err, adaptivepool.ErrTimeout)`. A full queue never fails
-immediately: `Submit` waits for space, so give it a context with a deadline
-to bound the wait.
+`errors.Is(err, adaptivepool.ErrTimeout)`. `Submit` and `SubmitTask` wait for
+space while the queue is full, so give them a context with a deadline to bound
+the wait.
 
 ---
 
@@ -223,7 +235,7 @@ http.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
 | `adaptivepool_queue_depth` | gauge | `pool` | How many tasks are waiting? |
 | `adaptivepool_queue_capacity` | gauge | `pool` | How large is the queue? |
 | `adaptivepool_jobs_submitted_total` | counter | `pool`, `kind` | Incoming rate by task type |
-| `adaptivepool_jobs_rejected_total` | counter | `pool`, `kind`, `reason` | Overload: `timeout`, `canceled` or `shutdown` |
+| `adaptivepool_jobs_rejected_total` | counter | `pool`, `kind`, `reason` | Overload: `timeout`, `canceled`, `queue_full` or `shutdown` |
 | `adaptivepool_jobs_completed_total` | counter | `pool`, `kind`, `status` | Throughput, and why tasks failed |
 | `adaptivepool_job_duration_seconds` | histogram | `pool`, `kind` | How long tasks take, including retries |
 | `adaptivepool_job_queue_wait_seconds` | histogram | `pool`, `kind` | How long tasks wait before starting |

@@ -12,6 +12,15 @@ func (p *pool) Submit(ctx context.Context, job Job) error {
 
 // SubmitTask submits a task to the pool for execution
 func (p *pool) SubmitTask(ctx context.Context, task Task) error {
+	return p.submit(ctx, task, true)
+}
+
+// TrySubmit submits a task only if the queue has space
+func (p *pool) TrySubmit(ctx context.Context, task Task) error {
+	return p.submit(ctx, task, false)
+}
+
+func (p *pool) submit(ctx context.Context, task Task, wait bool) error {
 	if task.Run == nil {
 		return ErrNilJob
 	}
@@ -47,6 +56,11 @@ func (p *pool) SubmitTask(ctx context.Context, task Task) error {
 		p.metrics.recordJobSubmitted(task.Kind)
 		return nil
 	default:
+	}
+
+	if !wait {
+		p.metrics.recordJobRejected(task.Kind, RejectQueueFull)
+		return ErrQueueFull
 	}
 
 	// Queue is full: wait for space with backpressure

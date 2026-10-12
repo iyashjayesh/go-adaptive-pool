@@ -25,6 +25,11 @@ type Pool interface {
 	// returns the same errors as Submit.
 	SubmitTask(ctx context.Context, task Task) error
 
+	// TrySubmit is like SubmitTask but never waits: if the queue is full it
+	// returns ErrQueueFull. ctx is only the job's context, used when
+	// task.Context is nil.
+	TrySubmit(ctx context.Context, task Task) error
+
 	// Shutdown gracefully shuts down the pool
 	// Waits for in-flight jobs to complete within the context timeout
 	Shutdown(ctx context.Context) error

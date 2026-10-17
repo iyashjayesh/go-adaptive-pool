@@ -3,6 +3,7 @@ package adaptivepool
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -94,4 +95,75 @@ func TestAttachErrorFailsNew(t *testing.T) {
 	errRegister := errors.New("duplicate metrics")
 	_, err := New(WithRecorder(&fakeRecorder{attachErr: errRegister}))
 	assert.ErrorIs(t, err, errRegister)
+}
+
+// panicRecorder panics on every event
+type panicRecorder struct{ calls atomic.Int64 }
+
+func (r *panicRecorder) JobSubmitted(string) { r.calls.Add(1); panic("JobSubmitted") }
+func (r *panicRecorder) JobRejected(string, RejectReason) {
+	r.calls.Add(1)
+	panic("JobRejected")
+}
+
+func (r *panicRecorder) JobCompleted(string, Status, int, time.Duration, time.Duration) {
+	r.calls.Add(1)
+	panic("JobCompleted")
+}
+func (r *panicRecorder) ScaledUp(int) { r.calls.Add(1); panic("ScaledUp") }
+
+type panicDetacher struct{ panicRecorder }
+
+func (*panicDetacher) Attach(PoolInfo, Metrics) error { return nil }
+func (*panicDetacher) Detach()                        { panic("Detach") }
+
+// A recorder is user code: its panics must not kill workers or callers, and
+// only the first one is logged.
+func TestRecorderPanicsAreContained(t *testing.T) {
+	logs := &logRecorder{}
+	rec := &panicRecorder{}
+	done := make(chan TaskResult, 2)
+	p := newTestPool(t, WithMinWorkers(1), WithMaxWorkers(1), WithLogger(logs.logger()), WithRecorder(rec),
+		WithOnTaskDone(func(r TaskResult) { done <- r }))
+
+	ctx := context.Background()
+	for range 2 {
+		require.NoError(t, p.Submit(ctx, func(context.Context) error { return nil }), "JobSubmitted panicked into the caller")
+	}
+	for range 2 {
+		select {
+		case r := <-done:
+			assert.Equal(t, StatusSuccess, r.Status, "the hook must still run after JobCompleted panics")
+		case <-time.After(2 * time.Second):
+			t.Fatal("worker died after a recorder panic")
+		}
+	}
+
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	assert.ErrorIs(t, p.Submit(canceled, func(context.Context) error { return nil }), context.Canceled)
+	p.(*pool).metrics.recordScaleUp(1)
+
+	assert.Equal(t, int64(2), p.Metrics().JobsProcessed())
+	assert.Equal(t, int64(6), rec.calls.Load(), "every event still reaches the recorder")
+	assert.Len(t, logs.records("recorder panicked; later panics are ignored without logging"), 1)
+}
+
+func TestRecorderPanicInDetachDoesNotHangShutdown(t *testing.T) {
+	logs := &logRecorder{}
+	p, err := New(WithLogger(logs.logger()), WithRecorder(&panicDetacher{}))
+	require.NoError(t, err)
+
+	shutdownDone := make(chan error, 1)
+	go func() { shutdownDone <- p.Shutdown(context.Background()) }()
+	select {
+	case err := <-shutdownDone:
+		require.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("Shutdown hung after Detach panicked")
+	}
+	require.NoError(t, p.Shutdown(context.Background()), "a second Shutdown must not hang either")
+	records := logs.records("recorder panicked; later panics are ignored without logging")
+	require.Len(t, records, 1)
+	assert.Equal(t, "Detach", records[0]["method"])
 }

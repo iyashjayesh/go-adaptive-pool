@@ -1,6 +1,8 @@
 package adaptivepool
 
 import (
+	"log/slog"
+	"runtime/debug"
 	"sync/atomic"
 	"time"
 )
@@ -54,10 +56,13 @@ type metrics struct {
 
 	rec      Recorder    // nil when no recorder is configured
 	detached atomic.Bool // set when the recorder is detached; later events are dropped
+
+	logger        *slog.Logger
+	panicReported atomic.Bool // only the first recorder panic is logged
 }
 
-func newMetrics(state *poolState, rec Recorder) *metrics {
-	return &metrics{state: state, rec: rec}
+func newMetrics(state *poolState, rec Recorder, logger *slog.Logger) *metrics {
+	return &metrics{state: state, rec: rec, logger: logger}
 }
 
 // QueueDepth returns the current queue depth
@@ -117,27 +122,56 @@ func average(totalNs, n int64) time.Duration {
 	return time.Duration(totalNs / n)
 }
 
+// recoverRecorder is deferred around every recorder call: a recorder that
+// panics must not kill a worker or the caller, or leave Shutdown hanging.
+// Only the first panic is logged, so a recorder that always panics doesn't
+// flood the log.
+func (m *metrics) recoverRecorder(method string) {
+	if r := recover(); r != nil && m.panicReported.CompareAndSwap(false, true) {
+		m.logger.Error("recorder panicked; later panics are ignored without logging",
+			slog.String("method", method),
+			slog.Any("panic", r),
+			slog.String("stack", string(debug.Stack())),
+		)
+	}
+}
+
 // detach stops reporting to the recorder and detaches it
 func (m *metrics) detach() {
 	m.detached.Store(true)
 	if a, ok := m.rec.(Attacher); ok {
-		a.Detach()
+		m.detachRecorder(a)
 	}
+}
+
+func (m *metrics) detachRecorder(a Attacher) {
+	defer m.recoverRecorder("Detach")
+	a.Detach()
 }
 
 // recordJobSubmitted records a job accepted into the queue
 func (m *metrics) recordJobSubmitted(kind string) {
 	if m.rec != nil && !m.detached.Load() {
-		m.rec.JobSubmitted(normalizeKind(kind))
+		m.reportSubmitted(kind)
 	}
+}
+
+func (m *metrics) reportSubmitted(kind string) {
+	defer m.recoverRecorder("JobSubmitted")
+	m.rec.JobSubmitted(normalizeKind(kind))
 }
 
 // recordJobRejected records a rejected job
 func (m *metrics) recordJobRejected(kind string, reason RejectReason) {
 	m.jobsRejected.Add(1)
 	if m.rec != nil && !m.detached.Load() {
-		m.rec.JobRejected(normalizeKind(kind), reason)
+		m.reportRejected(kind, reason)
 	}
+}
+
+func (m *metrics) reportRejected(kind string, reason RejectReason) {
+	defer m.recoverRecorder("JobRejected")
+	m.rec.JobRejected(normalizeKind(kind), reason)
 }
 
 // recordJobDone records a finished job. Retry counters are derived from the
@@ -155,13 +189,23 @@ func (m *metrics) recordJobDone(kind string, status Status, attempts int, queueW
 		m.retryAttempts.Add(int64(retries))
 	}
 	if m.rec != nil && !m.detached.Load() {
-		m.rec.JobCompleted(normalizeKind(kind), status, attempts, queueWait, duration)
+		m.reportCompleted(kind, status, attempts, queueWait, duration)
 	}
+}
+
+func (m *metrics) reportCompleted(kind string, status Status, attempts int, queueWait, duration time.Duration) {
+	defer m.recoverRecorder("JobCompleted")
+	m.rec.JobCompleted(normalizeKind(kind), status, attempts, queueWait, duration)
 }
 
 // recordScaleUp records a scale-up event
 func (m *metrics) recordScaleUp(added int) {
 	if m.rec != nil && !m.detached.Load() {
-		m.rec.ScaledUp(added)
+		m.reportScaleUp(added)
 	}
+}
+
+func (m *metrics) reportScaleUp(added int) {
+	defer m.recoverRecorder("ScaledUp")
+	m.rec.ScaledUp(added)
 }

@@ -331,7 +331,9 @@ func (r statsdRecorder) ScaledUp(added int) {
 pool, err := adaptivepool.New(adaptivepool.WithRecorder(statsdRecorder{client}))
 ```
 
-Kinds arrive normalized: an empty kind is reported as `"default"`.
+Kinds arrive normalized: an empty kind is reported as `"default"`. A panic in
+a method is recovered and logged once (later ones are ignored without logging),
+so a faulty recorder can't take down a worker or a caller.
 
 To export gauges (queue depth, workers) or register with a backend, also
 implement `Attacher`. `New` calls `Attach` with the pool's `PoolInfo` (name,

@@ -32,7 +32,9 @@ type PoolInfo struct {
 //
 // Kinds are normalized before being passed in: an empty kind is reported as
 // "default". Methods run on submitting and worker goroutines, so
-// implementations must be safe for concurrent use and fast.
+// implementations must be safe for concurrent use and fast. A panic in a
+// method is recovered and logged once, so a faulty recorder can't crash the
+// pool.
 type Recorder interface {
 	// JobSubmitted is called when a job is accepted into the queue
 	JobSubmitted(kind string)

@@ -71,7 +71,8 @@ func New(options ...Option) (Pool, error) {
 	// creating pool state
 	state := newPoolState(config.queueSize)
 
-	metrics := newMetrics(state, config.recorder)
+	logger := newLogger(config)
+	metrics := newMetrics(state, config.recorder, logger)
 	if a, ok := config.recorder.(Attacher); ok {
 		info := PoolInfo{Name: config.name, MinWorkers: config.minWorkers, MaxWorkers: config.maxWorkers, QueueSize: config.queueSize}
 		if err := a.Attach(info, metrics); err != nil {
@@ -86,7 +87,7 @@ func New(options ...Option) (Pool, error) {
 		config:           config,
 		state:            state,
 		metrics:          metrics,
-		logger:           newLogger(config),
+		logger:           logger,
 		epoch:            time.Now(),
 		dispatcherCtx:    dispatcherCtx,
 		dispatcherCancel: dispatcherCancel,

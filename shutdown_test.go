@@ -257,3 +257,89 @@ func TestSubmitConcurrentWithShutdown(t *testing.T) {
 		assert.Equal(t, accepted.Load(), executed.Load(), "accepted jobs must not be dropped")
 	}
 }
+
+// Regression: select picks randomly when forceStop and the queue are both
+// ready, so a worker that finished its job after a forced shutdown could
+// still start queued ones.
+func TestForcedShutdownDoesNotStartQueuedJobs(t *testing.T) {
+	for range 20 {
+		var started atomic.Int64
+		release := make(chan struct{})
+		p, err := New(WithMinWorkers(1), WithMaxWorkers(1), WithQueueSize(50), WithLogger(discardLogger()))
+		require.NoError(t, err)
+
+		require.NoError(t, p.Submit(context.Background(), func(context.Context) error {
+			<-release
+			return nil
+		}))
+		require.Eventually(t, func() bool { return p.Metrics().BusyWorkers() == 1 }, time.Second, time.Millisecond)
+		for range 50 {
+			require.NoError(t, p.Submit(context.Background(), func(context.Context) error {
+				started.Add(1)
+				return nil
+			}))
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		go func() {
+			<-ctx.Done()
+			time.Sleep(20 * time.Millisecond) // forceStop is closed by now
+			close(release)
+		}()
+		require.NoError(t, p.Shutdown(ctx))
+		cancel()
+		assert.Zero(t, started.Load(), "queued jobs started after a forced shutdown")
+	}
+}
+
+// Regression: a zero-length backoff skipped the forceStop check, so the retry
+// loop kept running at full speed after a forced shutdown.
+func TestForcedShutdownStopsZeroDelayRetries(t *testing.T) {
+	var attempts atomic.Int64
+	p, err := New(WithMinWorkers(1), WithMaxWorkers(1), WithLogger(discardLogger()),
+		WithRetry(RetryPolicy{MaxAttempts: 1 << 30, Backoff: ConstantBackoff{}}))
+	require.NoError(t, err)
+	require.NoError(t, p.Submit(context.Background(), func(context.Context) error {
+		attempts.Add(1)
+		return errTransient
+	}))
+	require.Eventually(t, func() bool { return attempts.Load() > 0 }, time.Second, time.Millisecond)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	require.NoError(t, p.Shutdown(ctx), "the worker should stop within the grace period")
+	assert.Less(t, time.Since(start), 900*time.Millisecond)
+
+	after := attempts.Load()
+	time.Sleep(50 * time.Millisecond)
+	assert.Equal(t, after, attempts.Load(), "retries kept running after Shutdown returned")
+}
+
+// Regression: Detach ran when the grace period ended even if workers were
+// still running and reporting to the recorder.
+func TestRecorderDetachedAfterWorkersExit(t *testing.T) {
+	rec := &fakeRecorder{}
+	p, err := New(WithMinWorkers(1), WithMaxWorkers(1), WithLogger(discardLogger()), WithRecorder(rec))
+	require.NoError(t, err)
+	require.NoError(t, p.Submit(context.Background(), func(context.Context) error {
+		time.Sleep(1300 * time.Millisecond) // outlives the 1s grace period
+		return nil
+	}))
+	require.Eventually(t, func() bool { return p.Metrics().BusyWorkers() == 1 }, time.Second, time.Millisecond)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	require.ErrorIs(t, p.Shutdown(ctx), context.DeadlineExceeded)
+
+	rec.mu.Lock()
+	assert.False(t, rec.detached, "detached while a worker was still running")
+	rec.mu.Unlock()
+
+	require.Eventually(t, func() bool {
+		rec.mu.Lock()
+		defer rec.mu.Unlock()
+		return rec.detached
+	}, 3*time.Second, 10*time.Millisecond)
+	assert.Len(t, rec.completedEvents(), 1, "the late job should be reported before Detach")
+}

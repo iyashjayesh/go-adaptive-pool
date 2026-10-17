@@ -291,7 +291,13 @@ func (r *retrier) capDelay(d time.Duration) time.Duration {
 // force-stopped
 func (r *retrier) wait(ctx context.Context, d time.Duration) error {
 	if d <= 0 {
-		return ctx.Err()
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if closed(r.stop) {
+			return ErrPoolShutdown
+		}
+		return nil
 	}
 	select {
 	case <-ctx.Done():

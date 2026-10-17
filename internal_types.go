@@ -66,6 +66,16 @@ func newPoolState(queueSize int) *poolState {
 	return ps
 }
 
+// closed reports whether c is closed, without blocking
+func closed(c <-chan struct{}) bool {
+	select {
+	case <-c:
+		return true
+	default:
+		return false
+	}
+}
+
 // isShutdown returns true if the pool is shutdown or draining
 func (ps *poolState) isShutdown() bool {
 	state := shutdownState(ps.shutdownState.Load())

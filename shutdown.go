@@ -35,10 +35,12 @@ func (p *pool) Shutdown(ctx context.Context) error {
 			close(workersDone)
 		}()
 
+		drained := false
 		select {
 		case <-workersDone:
 			// All workers finished gracefully
 			p.logger.Info("all workers finished gracefully")
+			drained = true
 
 		case <-ctx.Done():
 			// Timeout or cancellation - force shutdown
@@ -51,15 +53,14 @@ func (p *pool) Shutdown(ctx context.Context) error {
 			select {
 			case <-workersDone:
 				p.logger.Info("workers terminated after force signal")
+				drained = true
 			case <-time.After(1 * time.Second):
 				p.logger.Warn("some workers may not have terminated cleanly")
 				shutdownErr = ctx.Err()
 			}
 		}
 
-		if a, ok := p.metrics.rec.(Attacher); ok {
-			a.Detach()
-		}
+		p.detachRecorder(workersDone, drained)
 
 		// Transition to terminated state
 		p.state.setShutdownState(shutdownStateTerminated)
@@ -78,4 +79,21 @@ func (p *pool) Shutdown(ctx context.Context) error {
 	<-p.state.shutdownDone
 
 	return shutdownErr
+}
+
+// detachRecorder detaches the recorder once no worker can still report to it:
+// now if the workers have exited, otherwise when the last one does
+func (p *pool) detachRecorder(workersDone <-chan struct{}, drained bool) {
+	a, ok := p.metrics.rec.(Attacher)
+	if !ok {
+		return
+	}
+	if drained {
+		a.Detach()
+		return
+	}
+	go func() {
+		<-workersDone
+		a.Detach()
+	}()
 }

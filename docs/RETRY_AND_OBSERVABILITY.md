@@ -332,7 +332,7 @@ To export gauges (queue depth, workers) or register with a backend, also
 implement `Attacher`. `New` calls `Attach` with the pool's `PoolInfo` (name,
 worker limits, queue size) and its live `Metrics()`, which you can read
 whenever your backend collects; an error from `Attach` fails `New`.
-`Shutdown` calls `Detach` when it completes.
+`Shutdown` calls `Detach` once every worker has exited.
 
 ### Exposing metrics over HTTP without a backend
 
@@ -691,9 +691,11 @@ Panics are never wrapped. They surface as `*PanicError` with status `panic`.
 
 - **Graceful** (`Shutdown` finishes within its context): in-flight retries run
   to completion. They're already bounded by your policy.
-- **Forced** (`Shutdown`'s context expires): pending backoff waits are
-  aborted. The task finishes with status `shutdown`, and idle workers exit
-  without draining the rest of the queue.
+- **Forced** (`Shutdown`'s context expires): backoff waits, including
+  zero-length ones, are aborted and the task finishes with status `shutdown`.
+  A running attempt isn't interrupted. Each worker exits after its current
+  job without starting another from the queue, and the recorder is detached
+  once the last worker has exited.
 
 ### Testing retry timing with `Clock`
 

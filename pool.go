@@ -169,6 +169,10 @@ func (p *pool) runWorker(id int) {
 				// Queue closed, shutdown
 				return
 			}
+			// select picks at random when forceStop and the queue are both ready
+			if closed(p.state.forceStop) {
+				return
+			}
 
 			// Reset idle timer
 			if !idleTimer.Stop() {

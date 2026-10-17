@@ -17,7 +17,9 @@ type Pool interface {
 	//
 	// It returns ErrNilJob for a nil job, ErrPoolShutdown once Shutdown has
 	// started, ErrTimeout if ctx's deadline passes while waiting, and
-	// context.Canceled if ctx is cancelled while waiting.
+	// context.Canceled if ctx is cancelled while waiting. A ctx that is
+	// already done is rejected the same way, without queueing, unless
+	// Task.Context is set.
 	Submit(ctx context.Context, job Job) error
 
 	// SubmitTask is like Submit but carries a task ID and kind for logs and

@@ -107,6 +107,11 @@ Run: func(ctx context.Context) error {
 },
 ```
 
+A `ctx` that is already done is rejected up front when it is also the job's
+context (`Task.Context` is nil), since the job would be cancelled before it
+ran. With `Task.Context` set, `ctx` only bounds the wait, so the task is still
+queued when there is room.
+
 To never wait, use `TrySubmit`. It returns `ErrQueueFull` when the queue has
 no space, which suits best-effort work such as telemetry:
 
@@ -118,7 +123,7 @@ if errors.Is(err, adaptivepool.ErrQueueFull) {
 ```
 
 Its `ctx` is only the job's context (when `Task.Context` is nil), since there
-is no wait to bound.
+is no wait to bound; a done one is rejected up front.
 
 ### Submit errors
 
@@ -130,8 +135,8 @@ logs, metrics and `OnTaskDone`. Otherwise `Submit`, `SubmitTask` and
 |---|---|---|
 | `ErrNilJob` | `Run` is nil | not counted |
 | `ErrPoolShutdown` | `Shutdown` has started, before or while waiting for space | `shutdown` |
-| `ErrTimeout` | The queue stayed full until the submit context's deadline | `timeout` |
-| `context.Canceled` | The queue stayed full until the submit context was cancelled | `canceled` |
+| `ErrTimeout` | The submit context's deadline passed: while waiting for space, or before the call when it is also the job's context | `timeout` |
+| `context.Canceled` | The submit context was cancelled: while waiting for space, or before the call when it is also the job's context | `canceled` |
 | `ErrQueueFull` | `TrySubmit` only: the queue was full | `queue_full` |
 
 `ErrTimeout` doesn't wrap `context.DeadlineExceeded`, so check it with

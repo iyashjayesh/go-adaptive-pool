@@ -35,8 +35,13 @@ func (p *pool) submit(ctx context.Context, task Task, wait bool) error {
 		return ErrPoolShutdown
 	}
 
+	// Without Task.Context, ctx is also the job's context: a job queued with a
+	// done one would be cancelled before it runs
 	runCtx := task.Context
 	if runCtx == nil {
+		if ctx.Err() != nil {
+			return p.rejectDone(ctx, task.Kind)
+		}
 		runCtx = ctx
 	}
 	wrapper := jobWrapper{
@@ -47,9 +52,9 @@ func (p *pool) submit(ctx context.Context, task Task, wait bool) error {
 		kind:        task.Kind,
 	}
 
-	// Enqueue immediately if there is space. Without this, a context that is
-	// already done (e.g. a zero timeout meaning "don't wait") would race the
-	// send in the select below and be rejected at random even with room.
+	// Enqueue immediately if there is space. Without this, a done submit
+	// context (with Task.Context set) would race the send in the select below
+	// and be rejected at random even with room.
 	select {
 	case p.state.jobQueue <- wrapper:
 		p.metrics.recordJobSubmitted(task.Kind)
@@ -73,12 +78,16 @@ func (p *pool) submit(ctx context.Context, task Task, wait bool) error {
 		return ErrPoolShutdown
 
 	case <-ctx.Done():
-		// Context cancelled or timed out
-		if ctx.Err() == context.DeadlineExceeded {
-			p.metrics.recordJobRejected(task.Kind, RejectTimeout)
-			return ErrTimeout
-		}
-		p.metrics.recordJobRejected(task.Kind, RejectCanceled)
-		return ctx.Err()
+		return p.rejectDone(ctx, task.Kind)
 	}
+}
+
+// rejectDone records and returns the rejection for a done submit context
+func (p *pool) rejectDone(ctx context.Context, kind string) error {
+	if ctx.Err() == context.DeadlineExceeded {
+		p.metrics.recordJobRejected(kind, RejectTimeout)
+		return ErrTimeout
+	}
+	p.metrics.recordJobRejected(kind, RejectCanceled)
+	return ctx.Err()
 }

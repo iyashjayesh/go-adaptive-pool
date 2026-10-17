@@ -56,7 +56,8 @@ const (
 	StatusRetriesExhausted Status = "retries_exhausted"
 	// StatusBudgetExceeded means retrying stopped because of MaxElapsedTime
 	StatusBudgetExceeded Status = "budget_exceeded"
-	// StatusPermanent means the job returned an error wrapped with Permanent
+	// StatusPermanent means the job returned an error wrapped with Permanent,
+	// with or without retries
 	StatusPermanent Status = "permanent"
 	// StatusShutdown means retrying was aborted by a forced pool shutdown
 	StatusShutdown Status = "shutdown"
@@ -65,7 +66,8 @@ const (
 )
 
 // statusOf classifies the final error of a task. Errors reaching it come
-// straight from runJob or the retrier, so a type switch is sufficient.
+// straight from runJob or the retrier, so a type switch is sufficient, apart
+// from Permanent, which also reaches it unwrapped when retries are disabled.
 func statusOf(err error) Status {
 	switch e := err.(type) {
 	case nil:
@@ -85,6 +87,9 @@ func statusOf(err error) Status {
 		case context.Canceled, context.DeadlineExceeded:
 			return StatusCanceled
 		}
+	}
+	if hasMarker[*permanentError](err) {
+		return StatusPermanent
 	}
 	return StatusError
 }

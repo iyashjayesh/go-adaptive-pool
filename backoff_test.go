@@ -50,3 +50,11 @@ func TestBackoffValidation(t *testing.T) {
 		assert.ErrorIs(t, err, ErrInvalidConfig, "%#v", b)
 	}
 }
+
+// Regression: Base 0 with enough retries for the power to overflow made
+// 0 * +Inf a NaN, which converts to a huge negative Duration on amd64.
+func TestExponentialBackoffZeroBase(t *testing.T) {
+	for _, retry := range []int{1, 1023, 1024, 5000} {
+		assert.Zero(t, ExponentialBackoff{Multiplier: 2}.Next(retry), "retry %d", retry)
+	}
+}

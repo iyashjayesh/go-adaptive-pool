@@ -50,6 +50,7 @@ func executeCases() []struct {
 		}
 	}
 	noWait := WithRetry(RetryPolicy{MaxAttempts: 3, Backoff: ConstantBackoff{}})
+	permanent := Permanent(errBench)
 	return []struct {
 		name string
 		opts []Option
@@ -61,6 +62,7 @@ func executeCases() []struct {
 		{"retry-one-failure", []Option{noWait}, failOnce()},
 		{"hook", []Option{WithOnTaskDone(func(TaskResult) {})}, ok},
 		{"error", nil, func(context.Context) error { return errBench }},
+		{"permanent", nil, func(context.Context) error { return permanent }},
 		{"retry-exhausted", []Option{noWait}, func(context.Context) error { return errBench }},
 	}
 }

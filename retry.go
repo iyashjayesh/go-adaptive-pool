@@ -100,6 +100,9 @@ type ExponentialBackoff struct {
 
 // Next implements Backoff
 func (b ExponentialBackoff) Next(retry int) time.Duration {
+	if b.Base == 0 {
+		return 0 // 0 * +Inf below would be NaN, which converts to an arbitrary Duration
+	}
 	m := b.Multiplier
 	if m == 0 {
 		m = defaultMultiplier

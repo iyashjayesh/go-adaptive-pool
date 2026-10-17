@@ -600,7 +600,9 @@ func chargeCard(ctx context.Context) error {
 - It works even when wrapped further:
   `fmt.Errorf("charge: %w", adaptivepool.Permanent(err))`.
 - `Permanent(nil)` returns `nil`.
-- The stop reason is `ErrPermanentFailure` and the status is `permanent`.
+- The stop reason is `ErrPermanentFailure` and the status is `permanent`. Without
+  `WithRetry` the status is still `permanent`, but the error is your own
+  (still wrapped by `Permanent`) rather than a `*RetryError`.
 
 Use case: bad input, authorisation failures, "not found". Retrying these only
 wastes attempts and worker time.
@@ -751,7 +753,7 @@ Every finished task has exactly one `Status`. The same value appears in the
 | `panic` | The job panicked (`*PanicError`, never retried) |
 | `retries_exhausted` | All allowed attempts failed |
 | `budget_exceeded` | `MaxElapsedTime` would have been exceeded |
-| `permanent` | The job returned a `Permanent` error |
+| `permanent` | The job returned a `Permanent` error, with or without retries |
 | `canceled` | The job failed after its context was done, with or without retries |
 | `shutdown` | A forced shutdown aborted retrying |
 

@@ -115,3 +115,25 @@ func TestTaskContextUsedForRetries(t *testing.T) {
 		t.Fatal("backoff wait was not tied to the execution context")
 	}
 }
+
+// Regression: without WithRetry, Permanent errors were reported as plain
+// errors, so the status depended on whether retries were configured.
+func TestPermanentStatusDoesNotDependOnRetry(t *testing.T) {
+	cause := errors.New("bad input")
+	for name, opts := range map[string][]Option{
+		"no retry": nil,
+		"retry":    {WithRetry(RetryPolicy{MaxAttempts: 3, Backoff: ConstantBackoff{}})},
+	} {
+		t.Run(name, func(t *testing.T) {
+			done := make(chan TaskResult, 1)
+			opts = append(opts, WithLogger(discardLogger()), WithOnTaskDone(func(r TaskResult) { done <- r }))
+			p := newTestPool(t, opts...)
+			require.NoError(t, p.Submit(context.Background(), func(context.Context) error { return Permanent(cause) }))
+
+			r := <-done
+			assert.Equal(t, StatusPermanent, r.Status)
+			assert.Equal(t, 1, r.Attempts)
+			assert.ErrorIs(t, r.Err, cause)
+		})
+	}
+}

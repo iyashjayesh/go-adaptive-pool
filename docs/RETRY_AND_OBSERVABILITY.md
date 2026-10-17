@@ -366,8 +366,9 @@ histograms, use a recorder.
 
 ## In-process metrics
 
-`pool.Metrics()` is always available, with or without a recorder. It's handy for
-health endpoints, tests and logs:
+`pool.Metrics()` is always available, with or without a recorder, so
+`WithMetricsEnabled` is deprecated and does nothing: exporting is opt-in through
+`WithRecorder`. It's handy for health endpoints, tests and logs:
 
 ```go
 m := pool.Metrics()

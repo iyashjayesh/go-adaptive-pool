@@ -64,6 +64,15 @@ func WithScaleDownIdleDuration(d time.Duration) Option {
 	}
 }
 
+// WithMetricsEnabled has no effect.
+//
+// Deprecated: the pool always keeps in-process metrics, available through
+// Metrics(). To export them, use WithRecorder, e.g.
+// WithRecorder(promrecorder.New(reg)).
+func WithMetricsEnabled(bool) Option {
+	return func(*Config) {}
+}
+
 // WithScaleCooldown sets the minimum duration between scaling operations
 // Default: 5s
 func WithScaleCooldown(d time.Duration) Option {

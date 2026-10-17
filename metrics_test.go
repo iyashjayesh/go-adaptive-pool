@@ -24,3 +24,13 @@ func TestBusyWorkers(t *testing.T) {
 	require.Eventually(t, func() bool { return p.Metrics().BusyWorkers() == 0 }, 2*time.Second, 10*time.Millisecond)
 	assert.Positive(t, p.Metrics().AvgQueueWait()+p.Metrics().AvgJobLatency())
 }
+
+// WithMetricsEnabled is kept as a deprecated no-op so existing callers keep
+// compiling; in-process metrics are always on.
+func TestWithMetricsEnabledIsANoOp(t *testing.T) {
+	for _, enabled := range []bool{true, false} {
+		p := newTestPool(t, WithLogger(discardLogger()), WithMetricsEnabled(enabled))
+		require.NoError(t, p.Submit(context.Background(), func(context.Context) error { return nil }))
+		require.Eventually(t, func() bool { return p.Metrics().JobsProcessed() == 1 }, 2*time.Second, time.Millisecond)
+	}
+}

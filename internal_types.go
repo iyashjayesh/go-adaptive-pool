@@ -38,15 +38,16 @@ type poolState struct {
 	workerCount atomic.Int32
 	busyWorkers atomic.Int32
 
-	// Shutdown coordination. The queue is only closed once no Submit call
-	// is in flight (submitters == 0); closing wakes Submits blocked on a full
-	// queue so they return instead of sending on a closed channel.
+	// Shutdown coordination. Submit holds submitMu for reading while it
+	// checks the state and sends; Shutdown takes it for writing to close the
+	// queue, so no send can race the close. closing wakes Submits blocked on a
+	// full queue so they release the lock.
 	shutdownOnce  sync.Once
 	shutdownState atomic.Int32
 	shutdownDone  chan struct{}
 	closing       chan struct{} // closed when Shutdown starts
 	forceStop     chan struct{} // closed when Shutdown's context expires
-	submitters    atomic.Int64
+	submitMu      sync.RWMutex
 
 	// Scaling coordination
 	scalingMu   sync.Mutex

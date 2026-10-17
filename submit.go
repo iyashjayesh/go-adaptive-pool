@@ -25,11 +25,10 @@ func (p *pool) submit(ctx context.Context, task Task, wait bool) error {
 		return ErrNilJob
 	}
 
-	// Register before checking the state: Shutdown sets the state and then
-	// waits for submitters to reach zero, so either this call sees the
-	// shutdown or Shutdown waits for it before closing the queue.
-	p.state.submitters.Add(1)
-	defer p.state.submitters.Add(-1)
+	// Shutdown sets the state, then takes the write lock to close the queue:
+	// either this call sees the shutdown or Shutdown waits for it to finish.
+	p.state.submitMu.RLock()
+	defer p.state.submitMu.RUnlock()
 
 	if p.state.isShutdown() {
 		p.metrics.recordJobRejected(task.Kind, RejectShutdown)

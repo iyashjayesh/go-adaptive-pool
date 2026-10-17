@@ -3,7 +3,6 @@ package adaptivepool
 import (
 	"context"
 	"log/slog"
-	"runtime"
 	"time"
 )
 
@@ -24,11 +23,10 @@ func (p *pool) Shutdown(ctx context.Context) error {
 
 		// Closing the queue is only safe once no Submit can still send to it.
 		// In-flight calls either finish their send or return via closing, so
-		// this wait is brief.
-		for p.state.submitters.Load() > 0 {
-			runtime.Gosched()
-		}
+		// taking the lock is brief, and new Submits wait behind it.
+		p.state.submitMu.Lock()
 		close(p.state.jobQueue)
+		p.state.submitMu.Unlock()
 
 		// Wait for workers to finish with timeout
 		workersDone := make(chan struct{})

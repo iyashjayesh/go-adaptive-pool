@@ -332,7 +332,8 @@ To export gauges (queue depth, workers) or register with a backend, also
 implement `Attacher`. `New` calls `Attach` with the pool's `PoolInfo` (name,
 worker limits, queue size) and its live `Metrics()`, which you can read
 whenever your backend collects; an error from `Attach` fails `New`.
-`Shutdown` calls `Detach` once every worker has exited.
+`Shutdown` calls `Detach` once every worker has exited; the pool reports no
+events after that, so the recorder can be attached to a new pool.
 
 ### Exposing metrics over HTTP without a backend
 

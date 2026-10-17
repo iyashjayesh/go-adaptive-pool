@@ -32,8 +32,15 @@ var ErrAlreadyAttached = errors.New("promrecorder: recorder already attached to 
 // read at scrape time, so they cost nothing between scrapes. Use one
 // Recorder per pool.
 type Recorder struct {
-	reg        prometheus.Registerer
-	attached   atomic.Bool
+	reg      prometheus.Registerer
+	attached atomic.Bool
+
+	// state holds the collectors of the attached pool, nil when detached.
+	// Each event loads it once, so Attach and Detach never race with recording.
+	state atomic.Pointer[state]
+}
+
+type state struct {
 	collectors []prometheus.Collector
 
 	jobsSubmitted *prometheus.CounterVec   // kind
@@ -58,6 +65,7 @@ type kindSeries struct {
 	jobsRetried prometheus.Counter
 	retries     prometheus.Counter
 	completed   sync.Map // adaptivepool.Status -> prometheus.Counter
+	rejected    sync.Map // adaptivepool.RejectReason -> prometheus.Counter
 }
 
 var (
@@ -77,7 +85,16 @@ func (r *Recorder) Attach(info adaptivepool.PoolInfo, stats adaptivepool.Metrics
 	if !r.attached.CompareAndSwap(false, true) {
 		return ErrAlreadyAttached
 	}
+	s, err := r.register(info, stats)
+	if err != nil {
+		r.attached.Store(false)
+		return err
+	}
+	r.state.Store(s)
+	return nil
+}
 
+func (r *Recorder) register(info adaptivepool.PoolInfo, stats adaptivepool.Metrics) (*state, error) {
 	var constLabels prometheus.Labels
 	if info.Name != "" {
 		constLabels = prometheus.Labels{"pool": info.Name}
@@ -98,27 +115,28 @@ func (r *Recorder) Attach(info adaptivepool.PoolInfo, stats adaptivepool.Metrics
 		}, []string{"kind"})
 	}
 
-	r.jobsSubmitted = counterVec("jobs_submitted_total", "Jobs accepted into the queue", "kind")
-	r.jobsRejected = counterVec("jobs_rejected_total", "Jobs rejected at submission", "kind", "reason")
-	r.jobsCompleted = counterVec("jobs_completed_total", "Jobs that finished executing, by final status", "kind", "status")
-	r.jobDuration = histogramVec("job_duration_seconds", "Job execution time in seconds", prometheus.DefBuckets)
-	r.queueWait = histogramVec("job_queue_wait_seconds", "Time jobs spent queued before execution in seconds",
+	s := &state{}
+	s.jobsSubmitted = counterVec("jobs_submitted_total", "Jobs accepted into the queue", "kind")
+	s.jobsRejected = counterVec("jobs_rejected_total", "Jobs rejected at submission", "kind", "reason")
+	s.jobsCompleted = counterVec("jobs_completed_total", "Jobs that finished executing, by final status", "kind", "status")
+	s.jobDuration = histogramVec("job_duration_seconds", "Job execution time in seconds", prometheus.DefBuckets)
+	s.queueWait = histogramVec("job_queue_wait_seconds", "Time jobs spent queued before execution in seconds",
 		prometheus.ExponentialBuckets(0.0005, 4, 10))
-	r.jobsRetried = counterVec("jobs_retried_total", "Jobs that needed at least one retry", "kind")
-	r.retries = counterVec("retry_attempts_total", "Retries performed across all jobs", "kind")
-	r.scaleUps = prometheus.NewCounter(prometheus.CounterOpts{
+	s.jobsRetried = counterVec("jobs_retried_total", "Jobs that needed at least one retry", "kind")
+	s.retries = counterVec("retry_attempts_total", "Retries performed across all jobs", "kind")
+	s.scaleUps = prometheus.NewCounter(prometheus.CounterOpts{
 		Namespace: namespace, Name: "scale_up_events_total", Help: "Number of scale-up events", ConstLabels: constLabels,
 	})
 
-	r.collectors = []prometheus.Collector{
-		r.jobsSubmitted,
-		r.jobsRejected,
-		r.jobsCompleted,
-		r.jobDuration,
-		r.queueWait,
-		r.jobsRetried,
-		r.retries,
-		r.scaleUps,
+	s.collectors = []prometheus.Collector{
+		s.jobsSubmitted,
+		s.jobsRejected,
+		s.jobsCompleted,
+		s.jobDuration,
+		s.queueWait,
+		s.jobsRetried,
+		s.retries,
+		s.scaleUps,
 		gauge("queue_depth", "Current number of jobs in the queue",
 			func() float64 { return float64(stats.QueueDepth()) }),
 		gauge("queue_capacity", "Capacity of the job queue",
@@ -131,75 +149,97 @@ func (r *Recorder) Attach(info adaptivepool.PoolInfo, stats adaptivepool.Metrics
 			func() float64 { return float64(info.MaxWorkers) }),
 	}
 
-	for i, c := range r.collectors {
+	for i, c := range s.collectors {
 		if err := r.reg.Register(c); err != nil {
-			for _, done := range r.collectors[:i] {
+			for _, done := range s.collectors[:i] {
 				r.reg.Unregister(done)
 			}
-			r.attached.Store(false)
-			return err
+			return nil, err
 		}
 	}
-	return nil
+	return s, nil
 }
 
-// Detach unregisters all collectors. It is called when the pool shuts
-// down, after which the Recorder may be attached to a new pool.
+// Detach unregisters all collectors and drops later events. It is called
+// when the pool shuts down, after which the Recorder may be attached to a
+// new pool.
 func (r *Recorder) Detach() {
-	for _, c := range r.collectors {
+	s := r.state.Swap(nil)
+	if s == nil {
+		return
+	}
+	for _, c := range s.collectors {
 		r.reg.Unregister(c)
 	}
-	r.kinds.Clear()
 	r.attached.Store(false)
 }
 
 // series returns the cached series for kind, resolving them on first use
-func (r *Recorder) series(kind string) *kindSeries {
-	if s, ok := r.kinds.Load(kind); ok {
-		return s.(*kindSeries)
+func (s *state) series(kind string) *kindSeries {
+	if k, ok := s.kinds.Load(kind); ok {
+		return k.(*kindSeries)
 	}
-	s, _ := r.kinds.LoadOrStore(kind, &kindSeries{
-		submitted:   r.jobsSubmitted.WithLabelValues(kind),
-		duration:    r.jobDuration.WithLabelValues(kind),
-		queueWait:   r.queueWait.WithLabelValues(kind),
-		jobsRetried: r.jobsRetried.WithLabelValues(kind),
-		retries:     r.retries.WithLabelValues(kind),
+	k, _ := s.kinds.LoadOrStore(kind, &kindSeries{
+		submitted:   s.jobsSubmitted.WithLabelValues(kind),
+		duration:    s.jobDuration.WithLabelValues(kind),
+		queueWait:   s.queueWait.WithLabelValues(kind),
+		jobsRetried: s.jobsRetried.WithLabelValues(kind),
+		retries:     s.retries.WithLabelValues(kind),
 	})
-	return s.(*kindSeries)
+	return k.(*kindSeries)
 }
 
 // completedCounter returns the cached completion counter for kind and status
-func (r *Recorder) completedCounter(s *kindSeries, kind string, status adaptivepool.Status) prometheus.Counter {
-	if c, ok := s.completed.Load(status); ok {
+func (s *state) completedCounter(k *kindSeries, kind string, status adaptivepool.Status) prometheus.Counter {
+	if c, ok := k.completed.Load(status); ok {
 		return c.(prometheus.Counter)
 	}
-	c, _ := s.completed.LoadOrStore(status, r.jobsCompleted.WithLabelValues(kind, string(status)))
+	c, _ := k.completed.LoadOrStore(status, s.jobsCompleted.WithLabelValues(kind, string(status)))
+	return c.(prometheus.Counter)
+}
+
+// rejectedCounter returns the cached rejection counter for kind and reason
+func (s *state) rejectedCounter(k *kindSeries, kind string, reason adaptivepool.RejectReason) prometheus.Counter {
+	if c, ok := k.rejected.Load(reason); ok {
+		return c.(prometheus.Counter)
+	}
+	c, _ := k.rejected.LoadOrStore(reason, s.jobsRejected.WithLabelValues(kind, string(reason)))
 	return c.(prometheus.Counter)
 }
 
 // JobSubmitted implements adaptivepool.Recorder
 func (r *Recorder) JobSubmitted(kind string) {
-	r.series(kind).submitted.Inc()
+	if s := r.state.Load(); s != nil {
+		s.series(kind).submitted.Inc()
+	}
 }
 
 // JobRejected implements adaptivepool.Recorder
 func (r *Recorder) JobRejected(kind string, reason adaptivepool.RejectReason) {
-	r.jobsRejected.WithLabelValues(kind, string(reason)).Inc()
+	if s := r.state.Load(); s != nil {
+		s.rejectedCounter(s.series(kind), kind, reason).Inc()
+	}
 }
 
 // JobCompleted implements adaptivepool.Recorder
 func (r *Recorder) JobCompleted(kind string, status adaptivepool.Status, attempts int, queueWait, duration time.Duration) {
-	s := r.series(kind)
-	r.completedCounter(s, kind, status).Inc()
-	s.duration.Observe(duration.Seconds())
-	s.queueWait.Observe(queueWait.Seconds())
+	s := r.state.Load()
+	if s == nil {
+		return
+	}
+	k := s.series(kind)
+	s.completedCounter(k, kind, status).Inc()
+	k.duration.Observe(duration.Seconds())
+	k.queueWait.Observe(queueWait.Seconds())
 	if retries := attempts - 1; retries > 0 {
-		s.jobsRetried.Inc()
-		s.retries.Add(float64(retries))
+		k.jobsRetried.Inc()
+		k.retries.Add(float64(retries))
 	}
 }
 
 // ScaledUp implements adaptivepool.Recorder
 func (r *Recorder) ScaledUp(int) {
-	r.scaleUps.Inc()
+	if s := r.state.Load(); s != nil {
+		s.scaleUps.Inc()
+	}
 }

@@ -84,16 +84,15 @@ func (p *pool) Shutdown(ctx context.Context) error {
 // detachRecorder detaches the recorder once no worker can still report to it:
 // now if the workers have exited, otherwise when the last one does
 func (p *pool) detachRecorder(workersDone <-chan struct{}, drained bool) {
-	a, ok := p.metrics.rec.(Attacher)
-	if !ok {
+	if p.metrics.rec == nil {
 		return
 	}
 	if drained {
-		a.Detach()
+		p.metrics.detach()
 		return
 	}
 	go func() {
 		<-workersDone
-		a.Detach()
+		p.metrics.detach()
 	}()
 }

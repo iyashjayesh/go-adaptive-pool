@@ -52,7 +52,8 @@ type metrics struct {
 	// Reference to pool state for current values
 	state *poolState
 
-	rec Recorder // nil when no recorder is configured
+	rec      Recorder    // nil when no recorder is configured
+	detached atomic.Bool // set when the recorder is detached; later events are dropped
 }
 
 func newMetrics(state *poolState, rec Recorder) *metrics {
@@ -116,9 +117,17 @@ func average(totalNs, n int64) time.Duration {
 	return time.Duration(totalNs / n)
 }
 
+// detach stops reporting to the recorder and detaches it
+func (m *metrics) detach() {
+	m.detached.Store(true)
+	if a, ok := m.rec.(Attacher); ok {
+		a.Detach()
+	}
+}
+
 // recordJobSubmitted records a job accepted into the queue
 func (m *metrics) recordJobSubmitted(kind string) {
-	if m.rec != nil {
+	if m.rec != nil && !m.detached.Load() {
 		m.rec.JobSubmitted(normalizeKind(kind))
 	}
 }
@@ -126,7 +135,7 @@ func (m *metrics) recordJobSubmitted(kind string) {
 // recordJobRejected records a rejected job
 func (m *metrics) recordJobRejected(kind string, reason RejectReason) {
 	m.jobsRejected.Add(1)
-	if m.rec != nil {
+	if m.rec != nil && !m.detached.Load() {
 		m.rec.JobRejected(normalizeKind(kind), reason)
 	}
 }
@@ -145,14 +154,14 @@ func (m *metrics) recordJobDone(kind string, status Status, attempts int, queueW
 		m.jobsRetried.Add(1)
 		m.retryAttempts.Add(int64(retries))
 	}
-	if m.rec != nil {
+	if m.rec != nil && !m.detached.Load() {
 		m.rec.JobCompleted(normalizeKind(kind), status, attempts, queueWait, duration)
 	}
 }
 
 // recordScaleUp records a scale-up event
 func (m *metrics) recordScaleUp(added int) {
-	if m.rec != nil {
+	if m.rec != nil && !m.detached.Load() {
 		m.rec.ScaledUp(added)
 	}
 }

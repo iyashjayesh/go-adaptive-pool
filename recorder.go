@@ -47,8 +47,9 @@ type Recorder interface {
 
 // Attacher is implemented by recorders that export gauges or need
 // registration. New calls Attach before starting the pool, and an error
-// fails New. Shutdown calls Detach once every worker has exited. stats can be read at
-// any time to report current values such as queue depth.
+// fails New. Shutdown calls Detach once every worker has exited, after which
+// the pool reports no more events. stats can be read at any time to report
+// current values such as queue depth.
 type Attacher interface {
 	Attach(info PoolInfo, stats Metrics) error
 	Detach()

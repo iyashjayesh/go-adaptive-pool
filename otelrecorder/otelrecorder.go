@@ -65,6 +65,12 @@ type Recorder struct {
 	provider metric.MeterProvider
 	attached atomic.Bool
 
+	// state holds the instruments of the attached pool, nil when detached.
+	// Each event loads it once, so Attach and Detach never race with recording.
+	state atomic.Pointer[state]
+}
+
+type state struct {
 	poolAttr     attribute.KeyValue
 	submissions  metric.Int64Counter
 	rejections   metric.Int64Counter
@@ -107,76 +113,78 @@ func (r *Recorder) Attach(info adaptivepool.PoolInfo, stats adaptivepool.Metrics
 	if !r.attached.CompareAndSwap(false, true) {
 		return ErrAlreadyAttached
 	}
-	if err := r.attach(info, stats); err != nil {
+	s, err := r.register(info, stats)
+	if err != nil {
 		r.attached.Store(false)
 		return err
 	}
+	r.state.Store(s)
 	return nil
 }
 
-func (r *Recorder) attach(info adaptivepool.PoolInfo, stats adaptivepool.Metrics) error {
+func (r *Recorder) register(info adaptivepool.PoolInfo, stats adaptivepool.Metrics) (*state, error) {
 	meter := r.provider.Meter(instrumentationName)
-	r.poolAttr = PoolNameKey.String(info.Name)
-	r.scaleUpOpts = []metric.AddOption{metric.WithAttributeSet(attribute.NewSet(r.poolAttr))}
+	s := &state{poolAttr: PoolNameKey.String(info.Name)}
+	s.scaleUpOpts = []metric.AddOption{metric.WithAttributeSet(attribute.NewSet(s.poolAttr))}
 
 	var err error
-	if r.submissions, err = meter.Int64Counter("adaptivepool.job.submissions",
+	if s.submissions, err = meter.Int64Counter("adaptivepool.job.submissions",
 		metric.WithUnit("{submission}"), metric.WithDescription("Jobs accepted into the queue")); err != nil {
-		return err
+		return nil, err
 	}
-	if r.rejections, err = meter.Int64Counter("adaptivepool.job.rejections",
+	if s.rejections, err = meter.Int64Counter("adaptivepool.job.rejections",
 		metric.WithUnit("{rejection}"), metric.WithDescription("Jobs rejected at submission")); err != nil {
-		return err
+		return nil, err
 	}
-	if r.duration, err = meter.Float64Histogram("adaptivepool.job.duration",
+	if s.duration, err = meter.Float64Histogram("adaptivepool.job.duration",
 		metric.WithUnit("s"), metric.WithDescription("Job execution time, including retries"),
 		metric.WithExplicitBucketBoundaries(durationBuckets...)); err != nil {
-		return err
+		return nil, err
 	}
-	if r.waitTime, err = meter.Float64Histogram("adaptivepool.job.wait_time",
+	if s.waitTime, err = meter.Float64Histogram("adaptivepool.job.wait_time",
 		metric.WithUnit("s"), metric.WithDescription("Time jobs spent queued before execution"),
 		metric.WithExplicitBucketBoundaries(durationBuckets...)); err != nil {
-		return err
+		return nil, err
 	}
-	if r.retries, err = meter.Int64Counter("adaptivepool.job.retries",
+	if s.retries, err = meter.Int64Counter("adaptivepool.job.retries",
 		metric.WithUnit("{retry}"), metric.WithDescription("Retries performed across all jobs")); err != nil {
-		return err
+		return nil, err
 	}
-	if r.scaleUps, err = meter.Int64Counter("adaptivepool.worker.scale_ups",
+	if s.scaleUps, err = meter.Int64Counter("adaptivepool.worker.scale_ups",
 		metric.WithUnit("{scale_up}"), metric.WithDescription("Number of scale-up events")); err != nil {
-		return err
+		return nil, err
 	}
 
 	workers, err := meter.Int64ObservableUpDownCounter("adaptivepool.worker.count",
 		metric.WithUnit("{worker}"), metric.WithDescription("Workers by state"))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	workerLimit, err := meter.Int64ObservableUpDownCounter("adaptivepool.worker.limit",
 		metric.WithUnit("{worker}"), metric.WithDescription("Maximum number of workers"))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	workerMin, err := meter.Int64ObservableUpDownCounter("adaptivepool.worker.min",
 		metric.WithUnit("{worker}"), metric.WithDescription("Minimum number of workers"))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	queueUsage, err := meter.Int64ObservableUpDownCounter("adaptivepool.queue.usage",
 		metric.WithUnit("{job}"), metric.WithDescription("Jobs waiting in the queue"))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	queueLimit, err := meter.Int64ObservableUpDownCounter("adaptivepool.queue.limit",
 		metric.WithUnit("{job}"), metric.WithDescription("Capacity of the queue"))
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	pool := metric.WithAttributeSet(attribute.NewSet(r.poolAttr))
-	idle := metric.WithAttributeSet(attribute.NewSet(r.poolAttr, WorkerStateKey.String("idle")))
-	busy := metric.WithAttributeSet(attribute.NewSet(r.poolAttr, WorkerStateKey.String("busy")))
-	r.registration, err = meter.RegisterCallback(func(_ context.Context, o metric.Observer) error {
+	pool := metric.WithAttributeSet(attribute.NewSet(s.poolAttr))
+	idle := metric.WithAttributeSet(attribute.NewSet(s.poolAttr, WorkerStateKey.String("idle")))
+	busy := metric.WithAttributeSet(attribute.NewSet(s.poolAttr, WorkerStateKey.String("busy")))
+	s.registration, err = meter.RegisterCallback(func(_ context.Context, o metric.Observer) error {
 		active, inUse := stats.ActiveWorkers(), stats.BusyWorkers()
 		o.ObserveInt64(workers, int64(max(active-inUse, 0)), idle)
 		o.ObserveInt64(workers, int64(inUse), busy)
@@ -186,72 +194,87 @@ func (r *Recorder) attach(info adaptivepool.PoolInfo, stats adaptivepool.Metrics
 		o.ObserveInt64(queueLimit, int64(info.QueueSize), pool)
 		return nil
 	}, workers, workerLimit, workerMin, queueUsage, queueLimit)
-	return err
+	if err != nil {
+		return nil, err
+	}
+	return s, nil
 }
 
-// Detach unregisters the gauge callback. It is called when the pool shuts
-// down, after which the Recorder may be attached to a new pool.
+// Detach unregisters the gauge callback and drops later events. It is called
+// when the pool shuts down, after which the Recorder may be attached to a new
+// pool.
 func (r *Recorder) Detach() {
-	if r.registration != nil {
-		_ = r.registration.Unregister()
+	s := r.state.Swap(nil)
+	if s == nil {
+		return
 	}
-	r.kinds.Clear()
+	_ = s.registration.Unregister()
 	r.attached.Store(false)
 }
 
 // options returns the cached measurement options for kind
-func (r *Recorder) options(kind string) *kindOptions {
-	if o, ok := r.kinds.Load(kind); ok {
+func (s *state) options(kind string) *kindOptions {
+	if o, ok := s.kinds.Load(kind); ok {
 		return o.(*kindOptions)
 	}
-	opt := metric.WithAttributeSet(attribute.NewSet(r.poolAttr, JobKindKey.String(kind)))
-	o, _ := r.kinds.LoadOrStore(kind, &kindOptions{
+	opt := metric.WithAttributeSet(attribute.NewSet(s.poolAttr, JobKindKey.String(kind)))
+	o, _ := s.kinds.LoadOrStore(kind, &kindOptions{
 		add:    []metric.AddOption{opt},
 		record: []metric.RecordOption{opt},
 	})
 	return o.(*kindOptions)
 }
 
-func (r *Recorder) statusOptions(o *kindOptions, kind string, status adaptivepool.Status) []metric.RecordOption {
-	if s, ok := o.byStatus.Load(status); ok {
-		return s.([]metric.RecordOption)
+func (s *state) statusOptions(o *kindOptions, kind string, status adaptivepool.Status) []metric.RecordOption {
+	if v, ok := o.byStatus.Load(status); ok {
+		return v.([]metric.RecordOption)
 	}
-	set := attribute.NewSet(r.poolAttr, JobKindKey.String(kind), JobStatusKey.String(string(status)))
-	s, _ := o.byStatus.LoadOrStore(status, []metric.RecordOption{metric.WithAttributeSet(set)})
-	return s.([]metric.RecordOption)
+	set := attribute.NewSet(s.poolAttr, JobKindKey.String(kind), JobStatusKey.String(string(status)))
+	v, _ := o.byStatus.LoadOrStore(status, []metric.RecordOption{metric.WithAttributeSet(set)})
+	return v.([]metric.RecordOption)
 }
 
-func (r *Recorder) reasonOptions(o *kindOptions, kind string, reason adaptivepool.RejectReason) []metric.AddOption {
-	if s, ok := o.byReason.Load(reason); ok {
-		return s.([]metric.AddOption)
+func (s *state) reasonOptions(o *kindOptions, kind string, reason adaptivepool.RejectReason) []metric.AddOption {
+	if v, ok := o.byReason.Load(reason); ok {
+		return v.([]metric.AddOption)
 	}
-	set := attribute.NewSet(r.poolAttr, JobKindKey.String(kind), RejectionReasonKey.String(string(reason)))
-	s, _ := o.byReason.LoadOrStore(reason, []metric.AddOption{metric.WithAttributeSet(set)})
-	return s.([]metric.AddOption)
+	set := attribute.NewSet(s.poolAttr, JobKindKey.String(kind), RejectionReasonKey.String(string(reason)))
+	v, _ := o.byReason.LoadOrStore(reason, []metric.AddOption{metric.WithAttributeSet(set)})
+	return v.([]metric.AddOption)
 }
 
 // JobSubmitted implements adaptivepool.Recorder
 func (r *Recorder) JobSubmitted(kind string) {
-	r.submissions.Add(context.Background(), 1, r.options(kind).add...)
+	if s := r.state.Load(); s != nil {
+		s.submissions.Add(context.Background(), 1, s.options(kind).add...)
+	}
 }
 
 // JobRejected implements adaptivepool.Recorder
 func (r *Recorder) JobRejected(kind string, reason adaptivepool.RejectReason) {
-	r.rejections.Add(context.Background(), 1, r.reasonOptions(r.options(kind), kind, reason)...)
+	if s := r.state.Load(); s != nil {
+		s.rejections.Add(context.Background(), 1, s.reasonOptions(s.options(kind), kind, reason)...)
+	}
 }
 
 // JobCompleted implements adaptivepool.Recorder
 func (r *Recorder) JobCompleted(kind string, status adaptivepool.Status, attempts int, queueWait, duration time.Duration) {
+	s := r.state.Load()
+	if s == nil {
+		return
+	}
 	ctx := context.Background()
-	o := r.options(kind)
-	r.duration.Record(ctx, duration.Seconds(), r.statusOptions(o, kind, status)...)
-	r.waitTime.Record(ctx, queueWait.Seconds(), o.record...)
+	o := s.options(kind)
+	s.duration.Record(ctx, duration.Seconds(), s.statusOptions(o, kind, status)...)
+	s.waitTime.Record(ctx, queueWait.Seconds(), o.record...)
 	if retries := attempts - 1; retries > 0 {
-		r.retries.Add(ctx, int64(retries), o.add...)
+		s.retries.Add(ctx, int64(retries), o.add...)
 	}
 }
 
 // ScaledUp implements adaptivepool.Recorder
 func (r *Recorder) ScaledUp(int) {
-	r.scaleUps.Add(context.Background(), 1, r.scaleUpOpts...)
+	if s := r.state.Load(); s != nil {
+		s.scaleUps.Add(context.Background(), 1, s.scaleUpOpts...)
+	}
 }

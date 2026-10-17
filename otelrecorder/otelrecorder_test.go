@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"sync"
 	"testing"
 	"time"
 
@@ -160,14 +161,20 @@ func TestJobOutcomes(t *testing.T) {
 
 func TestRejections(t *testing.T) {
 	c, mp := newCollector(t)
-	p, err := adaptivepool.New(adaptivepool.WithName("orders"), adaptivepool.WithRecorder(New(mp)),
-		adaptivepool.WithLogger(slog.New(slog.DiscardHandler)))
-	require.NoError(t, err)
-	require.NoError(t, p.Shutdown(context.Background()))
+	p := newPool(t, adaptivepool.WithName("orders"), adaptivepool.WithMinWorkers(1), adaptivepool.WithMaxWorkers(1),
+		adaptivepool.WithQueueSize(1), adaptivepool.WithRecorder(New(mp)))
 
-	assert.ErrorIs(t, p.SubmitTask(context.Background(), adaptivepool.Task{Kind: "email", Run: func(context.Context) error { return nil }}), adaptivepool.ErrPoolShutdown)
+	release := make(chan struct{})
+	defer close(release)
+	task := adaptivepool.Task{Kind: "email", Run: func(context.Context) error { <-release; return nil }}
+	ctx := context.Background()
+	require.NoError(t, p.TrySubmit(ctx, task))
+	require.Eventually(t, func() bool { return p.Metrics().BusyWorkers() == 1 }, time.Second, time.Millisecond)
+	require.NoError(t, p.TrySubmit(ctx, task)) // fills the queue
+
+	assert.ErrorIs(t, p.TrySubmit(ctx, task), adaptivepool.ErrQueueFull)
 	assert.Equal(t, int64(1), c.sum("adaptivepool.job.rejections",
-		PoolNameKey.String("orders"), JobKindKey.String("email"), RejectionReasonKey.String("shutdown")))
+		PoolNameKey.String("orders"), JobKindKey.String("email"), RejectionReasonKey.String("queue_full")))
 }
 
 func TestRecorderServesOnePoolAtATime(t *testing.T) {
@@ -232,4 +239,62 @@ func BenchmarkJobCompleted(b *testing.B) {
 			rec.JobCompleted("email", adaptivepool.StatusSuccess, 1, time.Millisecond, time.Millisecond)
 		}
 	})
+}
+
+type stubStats struct{}
+
+func (stubStats) QueueDepth() int              { return 0 }
+func (stubStats) ActiveWorkers() int           { return 0 }
+func (stubStats) BusyWorkers() int             { return 0 }
+func (stubStats) JobsProcessed() int64         { return 0 }
+func (stubStats) JobsFailed() int64            { return 0 }
+func (stubStats) JobsRejected() int64          { return 0 }
+func (stubStats) JobsRetried() int64           { return 0 }
+func (stubStats) RetryAttempts() int64         { return 0 }
+func (stubStats) AvgJobLatency() time.Duration { return 0 }
+func (stubStats) AvgQueueWait() time.Duration  { return 0 }
+
+// Regression: Attach rewrote the recorder's instruments without
+// synchronization while events from a previous pool could still read them
+// (run with -race).
+func TestAttachDetachWhileRecording(t *testing.T) {
+	_, mp := newCollector(t)
+	rec := New(mp)
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Go(func() {
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				rec.JobSubmitted("k")
+				rec.JobRejected("k", adaptivepool.RejectTimeout)
+				rec.JobCompleted("k", adaptivepool.StatusSuccess, 2, time.Millisecond, time.Millisecond)
+				rec.ScaledUp(1)
+			}
+		})
+	}
+	for range 100 {
+		require.NoError(t, rec.Attach(adaptivepool.PoolInfo{Name: "p", MaxWorkers: 1, QueueSize: 1}, stubStats{}))
+		rec.Detach()
+	}
+	close(stop)
+	wg.Wait()
+}
+
+func TestEventsAfterDetachAreDropped(t *testing.T) {
+	_, mp := newCollector(t)
+	rec := New(mp)
+	require.NoError(t, rec.Attach(adaptivepool.PoolInfo{}, stubStats{}))
+	rec.Detach()
+	rec.Detach() // idempotent
+
+	rec.JobSubmitted("k")
+	rec.JobRejected("k", adaptivepool.RejectTimeout)
+	rec.JobCompleted("k", adaptivepool.StatusSuccess, 1, 0, 0)
+	rec.ScaledUp(1)
+	assert.Nil(t, rec.state.Load())
 }

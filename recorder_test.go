@@ -30,14 +30,45 @@ func TestRecorderReceivesEvents(t *testing.T) {
 
 func TestRecorderReceivesRejections(t *testing.T) {
 	rec := &fakeRecorder{}
+	p, err := New(WithMinWorkers(1), WithMaxWorkers(1), WithQueueSize(1), WithLogger(discardLogger()), WithRecorder(rec))
+	require.NoError(t, err)
+
+	release := make(chan struct{})
+	task := Task{Kind: "email", Run: func(context.Context) error { <-release; return nil }}
+	ctx := context.Background()
+	require.NoError(t, p.TrySubmit(ctx, task))
+	require.Eventually(t, func() bool { return p.Metrics().BusyWorkers() == 1 }, time.Second, time.Millisecond)
+	require.NoError(t, p.TrySubmit(ctx, task)) // fills the queue
+	assert.ErrorIs(t, p.TrySubmit(ctx, task), ErrQueueFull)
+
+	// A Submit blocked on the full queue is rejected when Shutdown starts
+	blocked := make(chan error, 1)
+	go func() { blocked <- p.SubmitTask(ctx, task) }()
+	time.Sleep(20 * time.Millisecond)
+	shutdownDone := make(chan error, 1)
+	go func() { shutdownDone <- p.Shutdown(ctx) }()
+	assert.ErrorIs(t, <-blocked, ErrPoolShutdown)
+	close(release)
+	require.NoError(t, <-shutdownDone)
+
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	assert.Equal(t, []string{"email/queue_full", "email/shutdown"}, rec.rejected)
+}
+
+// Detach is final: a pool that has shut down no longer reports, so late
+// Submit calls can't reach a recorder that has been attached to another pool.
+func TestNoEventsAfterDetach(t *testing.T) {
+	rec := &fakeRecorder{}
 	p, err := New(WithLogger(discardLogger()), WithRecorder(rec))
 	require.NoError(t, err)
 	require.NoError(t, p.Shutdown(context.Background()))
 
 	assert.ErrorIs(t, p.SubmitTask(context.Background(), Task{Kind: "email", Run: func(context.Context) error { return nil }}), ErrPoolShutdown)
+	assert.Equal(t, int64(1), p.Metrics().JobsRejected(), "in-process counters keep counting")
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
-	assert.Equal(t, []string{"email/shutdown"}, rec.rejected)
+	assert.Empty(t, rec.rejected)
 }
 
 func TestAttacherLifecycle(t *testing.T) {

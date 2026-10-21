@@ -1,6 +1,7 @@
 package adaptivepool
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"time"
@@ -14,8 +15,9 @@ var (
 	// ErrQueueFull is returned by TrySubmit when the queue has no space
 	ErrQueueFull = errors.New("queue is full")
 
-	// ErrTimeout is returned when a job submission times out
-	ErrTimeout = errors.New("submission timeout")
+	// ErrTimeout is returned when a job submission times out. It wraps
+	// context.DeadlineExceeded, so errors.Is matches both.
+	ErrTimeout = fmt.Errorf("submission timeout: %w", context.DeadlineExceeded)
 
 	// ErrNilJob is returned when submitting a nil job
 	ErrNilJob = errors.New("job is nil")

@@ -139,10 +139,10 @@ logs, metrics and `OnTaskDone`. Otherwise `Submit`, `SubmitTask` and
 | `context.Canceled` | The submit context was cancelled: while waiting for space, or before the call when it is also the job's context | `canceled` |
 | `ErrQueueFull` | `TrySubmit` only: the queue was full | `queue_full` |
 
-`ErrTimeout` doesn't wrap `context.DeadlineExceeded`, so check it with
-`errors.Is(err, adaptivepool.ErrTimeout)`. `Submit` and `SubmitTask` wait for
-space while the queue is full, so give them a context with a deadline to bound
-the wait.
+`ErrTimeout` wraps `context.DeadlineExceeded`, so `errors.Is` matches either one,
+and `err == adaptivepool.ErrTimeout` still works. `Submit` and `SubmitTask` wait
+for space while the queue is full, so give them a context with a deadline to
+bound the wait.
 
 ---
 

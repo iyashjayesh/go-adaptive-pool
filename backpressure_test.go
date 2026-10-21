@@ -340,3 +340,23 @@ func TestTrySubmitErrors(t *testing.T) {
 	require.NoError(t, p.Shutdown(ctx))
 	assert.ErrorIs(t, p.TrySubmit(ctx, Task{Run: func(context.Context) error { return nil }}), ErrPoolShutdown)
 }
+
+// Regression: ErrTimeout was a plain error, so a timed-out submission didn't
+// match context.DeadlineExceeded although a cancelled one matched
+// context.Canceled.
+func TestErrTimeoutWrapsDeadlineExceeded(t *testing.T) {
+	assert.ErrorIs(t, ErrTimeout, context.DeadlineExceeded)
+
+	p := newTestPool(t, WithLogger(discardLogger()))
+	ctx, cancel := context.WithTimeout(context.Background(), 0)
+	defer cancel()
+	err := p.Submit(ctx, func(context.Context) error { return nil })
+
+	assert.Equal(t, ErrTimeout, err, "the sentinel itself is still returned")
+	assert.ErrorIs(t, err, ErrTimeout)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	var timeout interface{ Timeout() bool }
+	require.ErrorAs(t, err, &timeout)
+	assert.True(t, timeout.Timeout(), "callers that look for a Timeout() method see it too")
+	assert.NotErrorIs(t, err, context.Canceled)
+}

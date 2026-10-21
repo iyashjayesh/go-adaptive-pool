@@ -34,6 +34,8 @@ type Pool interface {
 
 	// Shutdown gracefully shuts down the pool
 	// Waits for in-flight jobs to complete within the context timeout
+	// It may be called more than once: later calls return the first call's
+	// result, or ctx's error if ctx ends before the shutdown does
 	Shutdown(ctx context.Context) error
 
 	// Metrics returns the pool metrics

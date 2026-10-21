@@ -6,11 +6,11 @@ import (
 	"time"
 )
 
-// Shutdown gracefully shuts down the pool
+// Shutdown gracefully shuts down the pool. The first call does the work; a
+// later call returns the first call's result, or ctx's error if ctx ends
+// before the shutdown does.
 func (p *pool) Shutdown(ctx context.Context) error {
-	var shutdownErr error
-
-	p.state.shutdownOnce.Do(func() {
+	if p.state.shutdownStarted.CompareAndSwap(false, true) {
 		p.logger.Info("initiating pool shutdown")
 
 		// Transition to draining state and wake Submits blocked on a full queue
@@ -56,7 +56,7 @@ func (p *pool) Shutdown(ctx context.Context) error {
 				drained = true
 			case <-time.After(1 * time.Second):
 				p.logger.Warn("some workers may not have terminated cleanly")
-				shutdownErr = ctx.Err()
+				p.state.shutdownErr = ctx.Err()
 			}
 		}
 
@@ -73,12 +73,20 @@ func (p *pool) Shutdown(ctx context.Context) error {
 		} else {
 			p.logger.Info("shutdown complete, all jobs processed")
 		}
-	})
+		return p.state.shutdownErr
+	}
 
-	// Wait for shutdown to complete
-	<-p.state.shutdownDone
-
-	return shutdownErr
+	// Not sync.Once: it would hold this call until the first one finishes,
+	// whatever ctx says
+	if closed(p.state.shutdownDone) {
+		return p.state.shutdownErr
+	}
+	select {
+	case <-p.state.shutdownDone:
+		return p.state.shutdownErr
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // detachRecorder detaches the recorder once no worker can still report to it:

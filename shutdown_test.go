@@ -343,3 +343,59 @@ func TestRecorderDetachedAfterWorkersExit(t *testing.T) {
 	}, 3*time.Second, 10*time.Millisecond)
 	assert.Len(t, rec.completedEvents(), 1, "the late job should be reported before Detach")
 }
+
+// Regression: a second Shutdown returned nil even when the first had timed
+// out, because only the call that ran the shutdown kept its result.
+func TestLaterShutdownReportsFirstResult(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
+	p, err := New(WithMinWorkers(1), WithMaxWorkers(1), WithLogger(discardLogger()))
+	require.NoError(t, err)
+	require.NoError(t, p.Submit(context.Background(), func(context.Context) error {
+		<-release
+		return nil
+	}))
+	require.Eventually(t, func() bool { return p.Metrics().BusyWorkers() == 1 }, time.Second, time.Millisecond)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	require.ErrorIs(t, p.Shutdown(ctx), context.DeadlineExceeded) // the worker is stuck
+
+	assert.ErrorIs(t, p.Shutdown(context.Background()), context.DeadlineExceeded,
+		"a later call should report that the shutdown timed out")
+	expired, cancelExpired := context.WithCancel(context.Background())
+	cancelExpired()
+	assert.ErrorIs(t, p.Shutdown(expired), context.DeadlineExceeded,
+		"a finished shutdown's result wins over the caller's own context")
+}
+
+// Regression: sync.Once made a later Shutdown wait for the first to finish
+// whatever its own context said.
+func TestLaterShutdownHonoursItsOwnContext(t *testing.T) {
+	release := make(chan struct{})
+	p, err := New(WithMinWorkers(1), WithMaxWorkers(1), WithLogger(discardLogger()))
+	require.NoError(t, err)
+	require.NoError(t, p.Submit(context.Background(), func(context.Context) error {
+		<-release
+		return nil
+	}))
+	require.Eventually(t, func() bool { return p.Metrics().BusyWorkers() == 1 }, time.Second, time.Millisecond)
+
+	first := make(chan error, 1)
+	go func() { first <- p.Shutdown(context.Background()) }() // blocked on the running job
+	require.Eventually(t, func() bool { return p.(*pool).state.isShutdown() }, time.Second, time.Millisecond)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	later := make(chan error, 1)
+	go func() { later <- p.Shutdown(ctx) }()
+	select {
+	case err := <-later:
+		assert.ErrorIs(t, err, context.DeadlineExceeded)
+	case <-time.After(2 * time.Second):
+		t.Fatal("a later Shutdown ignored its own context")
+	}
+
+	close(release)
+	require.NoError(t, <-first)
+}

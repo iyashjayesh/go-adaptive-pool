@@ -42,12 +42,13 @@ type poolState struct {
 	// checks the state and sends; Shutdown takes it for writing to close the
 	// queue, so no send can race the close. closing wakes Submits blocked on a
 	// full queue so they release the lock.
-	shutdownOnce  sync.Once
-	shutdownState atomic.Int32
-	shutdownDone  chan struct{}
-	closing       chan struct{} // closed when Shutdown starts
-	forceStop     chan struct{} // closed when Shutdown's context expires
-	submitMu      sync.RWMutex
+	shutdownStarted atomic.Bool // set by the first Shutdown call, which runs it
+	shutdownErr     error       // its result, written before shutdownDone is closed
+	shutdownState   atomic.Int32
+	shutdownDone    chan struct{}
+	closing         chan struct{} // closed when Shutdown starts
+	forceStop       chan struct{} // closed when Shutdown's context expires
+	submitMu        sync.RWMutex
 
 	// Scaling coordination
 	scalingMu   sync.Mutex

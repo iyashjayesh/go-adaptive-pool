@@ -715,6 +715,9 @@ Panics are never wrapped. They surface as `*PanicError` with status `panic`.
   A running attempt isn't interrupted. Each worker exits after its current
   job without starting another from the queue, and the recorder is detached
   once the last worker has exited.
+- **Repeated calls:** the first call does the work. A later call returns the
+  first call's result (for example `context.DeadlineExceeded` if it timed out),
+  or its own `ctx` error if its `ctx` ends before the shutdown does.
 
 ### Testing retry timing with `Clock`
 

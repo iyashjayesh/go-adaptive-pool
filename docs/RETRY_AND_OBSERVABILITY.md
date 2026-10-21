@@ -216,6 +216,10 @@ A recorder serves one pool at a time; create one per pool.
 
 ### Prometheus
 
+```bash
+go get github.com/iyashjayesh/go-adaptive-pool/promrecorder
+```
+
 ```go
 reg := prometheus.NewRegistry() // or prometheus.DefaultRegisterer
 pool, err := adaptivepool.New(
@@ -270,6 +274,10 @@ adaptivepool_busy_workers / adaptivepool_max_workers
 ```
 
 ### OpenTelemetry
+
+```bash
+go get github.com/iyashjayesh/go-adaptive-pool/otelrecorder
+```
 
 ```go
 pool, err := adaptivepool.New(

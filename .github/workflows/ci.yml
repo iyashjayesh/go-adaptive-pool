@@ -31,16 +31,23 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-go-
 
+    # The recorder adapters are separate modules, so ./... stops at them
     - name: Download dependencies
-      run: go mod download
+      run: |
+        for d in . promrecorder otelrecorder examples/observability; do
+          (cd $d && go mod download)
+        done
 
     - name: Run tests
-      run: go test -race -v -coverprofile=coverage.out ./...
+      run: |
+        for d in . promrecorder otelrecorder; do
+          (cd $d && go test -race -v -coverprofile=coverage.out ./...)
+        done
 
     - name: Upload coverage
       uses: codecov/codecov-action@v4
       with:
-        file: ./coverage.out
+        files: ./coverage.out,./promrecorder/coverage.out,./otelrecorder/coverage.out
         flags: unittests
         name: codecov-umbrella
 
@@ -64,6 +71,30 @@ jobs:
         args: --timeout=5m
         only-new-issues: true
 
+    - name: Run golangci-lint (promrecorder)
+      uses: golangci/golangci-lint-action@v8
+      with:
+        version: latest
+        args: --timeout=5m
+        only-new-issues: true
+        working-directory: promrecorder
+
+    - name: Run golangci-lint (otelrecorder)
+      uses: golangci/golangci-lint-action@v8
+      with:
+        version: latest
+        args: --timeout=5m
+        only-new-issues: true
+        working-directory: otelrecorder
+
+    - name: Run golangci-lint (examples/observability)
+      uses: golangci/golangci-lint-action@v8
+      with:
+        version: latest
+        args: --timeout=5m
+        only-new-issues: true
+        working-directory: examples/observability
+
   benchmark:
     name: Benchmark
     runs-on: ubuntu-latest
@@ -78,7 +109,10 @@ jobs:
         go-version: '1.25'
 
     - name: Run benchmarks
-      run: go test -bench=. -benchmem -benchtime=5s ./... | tee benchmark.txt
+      run: |
+        for d in . promrecorder otelrecorder; do
+          (cd $d && go test -bench=. -benchmem -benchtime=5s ./...)
+        done | tee benchmark.txt
 
     - name: Upload benchmark results
       uses: actions/upload-artifact@v4

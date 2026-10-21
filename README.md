@@ -53,6 +53,13 @@ The `adaptive` behavior here is worker lifecycle adaptation, not request-level c
 go get github.com/iyashjayesh/go-adaptive-pool
 ```
 
+The core has no dependency on Prometheus or OpenTelemetry. The metrics adapters are separate modules; add the one you use:
+
+```bash
+go get github.com/iyashjayesh/go-adaptive-pool/promrecorder   # Prometheus
+go get github.com/iyashjayesh/go-adaptive-pool/otelrecorder   # OpenTelemetry
+```
+
 ## Quick Start
 
 ```go
@@ -377,16 +384,17 @@ Key components:
 
 ## Testing
 
-Run tests with race detector:
+The repository has four Go modules (the core, `promrecorder`, `otelrecorder` and `examples/observability`), and `./...` does not cross module boundaries. `make test` runs every module with the race detector:
+
+```bash
+make test
+```
+
+To test one module, run `go test` inside its directory:
 
 ```bash
 go test -race -v ./...
-```
-
-Run with coverage:
-
-```bash
-go test -race -coverprofile=coverage.out ./...
+cd promrecorder && go test -race -coverprofile=coverage.out ./...
 go tool cover -html=coverage.out
 ```
 

@@ -8,6 +8,14 @@ GOTEST=$(GOCMD) test
 GOMOD=$(GOCMD) mod
 GOLINT=golangci-lint
 
+# The recorder adapters and the observability example are separate modules,
+# which ./... does not enter, so each target runs in every module.
+MODULES=. promrecorder otelrecorder examples/observability
+TESTED_MODULES=. promrecorder otelrecorder
+define each
+	@for d in $(1); do echo "== $$d"; (cd $$d && $(2)) || exit 1; done
+endef
+
 # Main targets
 all: lint build test
 
@@ -27,20 +35,20 @@ help:
 
 build:
 	@echo "Building adaptivepool..."
-	$(GOBUILD) ./...
+	$(call each,$(MODULES),$(GOBUILD) -o /dev/null ./...)
 
 test:
 	@echo "Running tests with race detector and coverage..."
-	$(GOTEST) -race -v -coverprofile=coverage.out ./...
-	@echo "To view coverage report: go tool cover -html=coverage.out"
+	$(call each,$(TESTED_MODULES),$(GOTEST) -race -v -coverprofile=coverage.out ./...)
+	@echo "To view a coverage report: cd <module> && go tool cover -html=coverage.out"
 
 lint:
 	@echo "Running lint check..."
-	$(GOLINT) run ./...
+	$(call each,$(MODULES),$(GOLINT) run ./...)
 
 bench:
 	@echo "Running benchmarks..."
-	$(GOTEST) -bench=. -benchmem ./...
+	$(call each,$(TESTED_MODULES),$(GOTEST) -bench=. -benchmem ./...)
 
 run-http:
 	@echo "Running HTTP server example..."
@@ -52,7 +60,7 @@ run-batch:
 
 run-observability:
 	@echo "Running observability example (metrics on :2112/metrics unless ARGS sets -metrics-addr)..."
-	$(GOCMD) run ./examples/observability $(ARGS)
+	$(GOCMD) run -C examples/observability . $(ARGS)
 
 run-1m-with:
 	@echo "Running 1M RPS simulator WITH adaptivepool..."

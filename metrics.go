@@ -27,6 +27,9 @@ type Metrics interface {
 	// JobsRejected returns the total number of jobs rejected
 	JobsRejected() int64
 
+	// JobsDropped returns the number of queued jobs a forced shutdown discarded without running
+	JobsDropped() int64
+
 	// JobsRetried returns the number of processed jobs that needed at least one retry
 	JobsRetried() int64
 
@@ -46,6 +49,7 @@ type metrics struct {
 	jobsProcessed  atomic.Int64
 	jobsFailed     atomic.Int64
 	jobsRejected   atomic.Int64
+	jobsDropped    atomic.Int64
 	jobsRetried    atomic.Int64
 	retryAttempts  atomic.Int64
 	totalLatency   atomic.Int64 // in nanoseconds
@@ -103,6 +107,11 @@ func (m *metrics) JobsRetried() int64 {
 // RetryAttempts returns the total number of retries across all jobs
 func (m *metrics) RetryAttempts() int64 {
 	return m.retryAttempts.Load()
+}
+
+// JobsDropped returns the number of queued jobs dropped by a forced shutdown
+func (m *metrics) JobsDropped() int64 {
+	return m.jobsDropped.Load()
 }
 
 // AvgJobLatency returns the average job execution time
@@ -196,6 +205,20 @@ func (m *metrics) recordJobDone(kind string, status Status, attempts int, queueW
 func (m *metrics) reportCompleted(kind string, status Status, attempts int, queueWait, duration time.Duration) {
 	defer m.recoverRecorder("JobCompleted")
 	m.rec.JobCompleted(normalizeKind(kind), status, attempts, queueWait, duration)
+}
+
+// recordJobDropped records a queued job discarded by a forced shutdown. It
+// isn't counted as processed, so it doesn't skew the latency averages.
+func (m *metrics) recordJobDropped(kind string) {
+	m.jobsDropped.Add(1)
+	if m.rec != nil && !m.detached.Load() {
+		m.reportDropped(kind)
+	}
+}
+
+func (m *metrics) reportDropped(kind string) {
+	defer m.recoverRecorder("JobDropped")
+	m.rec.JobDropped(normalizeKind(kind))
 }
 
 // recordScaleUp records a scale-up event

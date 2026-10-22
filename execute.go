@@ -45,6 +45,20 @@ func (p *pool) executeJob(workerID int, job jobWrapper) {
 	}
 }
 
+// dropJob reports a queued job that a forced shutdown discarded before it ran
+func (p *pool) dropJob(job jobWrapper) {
+	p.metrics.recordJobDropped(job.kind)
+	if p.config.onTaskDone != nil {
+		p.notifyTaskDone(TaskResult{
+			ID:        job.taskID,
+			Kind:      job.kind,
+			QueueWait: time.Since(p.epoch) - time.Duration(job.submittedAt),
+			Status:    StatusShutdown,
+			Err:       ErrPoolShutdown,
+		})
+	}
+}
+
 // notifyTaskDone invokes the OnTaskDone hook, shielding the worker from panics
 func (p *pool) notifyTaskDone(res TaskResult) {
 	defer func() {

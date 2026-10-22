@@ -46,6 +46,7 @@ type state struct {
 	jobsSubmitted *prometheus.CounterVec   // kind
 	jobsRejected  *prometheus.CounterVec   // kind, reason
 	jobsCompleted *prometheus.CounterVec   // kind, status
+	jobsDropped   *prometheus.CounterVec   // kind
 	jobDuration   *prometheus.HistogramVec // kind
 	queueWait     *prometheus.HistogramVec // kind
 	jobsRetried   *prometheus.CounterVec   // kind
@@ -60,6 +61,7 @@ type state struct {
 
 type kindSeries struct {
 	submitted   prometheus.Counter
+	dropped     prometheus.Counter
 	duration    prometheus.Observer
 	queueWait   prometheus.Observer
 	jobsRetried prometheus.Counter
@@ -119,6 +121,7 @@ func (r *Recorder) register(info adaptivepool.PoolInfo, stats adaptivepool.Metri
 	s.jobsSubmitted = counterVec("jobs_submitted_total", "Jobs accepted into the queue", "kind")
 	s.jobsRejected = counterVec("jobs_rejected_total", "Jobs rejected at submission", "kind", "reason")
 	s.jobsCompleted = counterVec("jobs_completed_total", "Jobs that finished executing, by final status", "kind", "status")
+	s.jobsDropped = counterVec("jobs_dropped_total", "Queued jobs a forced shutdown discarded without running", "kind")
 	s.jobDuration = histogramVec("job_duration_seconds", "Job execution time in seconds", prometheus.DefBuckets)
 	s.queueWait = histogramVec("job_queue_wait_seconds", "Time jobs spent queued before execution in seconds",
 		prometheus.ExponentialBuckets(0.0005, 4, 10))
@@ -132,6 +135,7 @@ func (r *Recorder) register(info adaptivepool.PoolInfo, stats adaptivepool.Metri
 		s.jobsSubmitted,
 		s.jobsRejected,
 		s.jobsCompleted,
+		s.jobsDropped,
 		s.jobDuration,
 		s.queueWait,
 		s.jobsRetried,
@@ -181,6 +185,7 @@ func (s *state) series(kind string) *kindSeries {
 	}
 	k, _ := s.kinds.LoadOrStore(kind, &kindSeries{
 		submitted:   s.jobsSubmitted.WithLabelValues(kind),
+		dropped:     s.jobsDropped.WithLabelValues(kind),
 		duration:    s.jobDuration.WithLabelValues(kind),
 		queueWait:   s.queueWait.WithLabelValues(kind),
 		jobsRetried: s.jobsRetried.WithLabelValues(kind),
@@ -234,6 +239,13 @@ func (r *Recorder) JobCompleted(kind string, status adaptivepool.Status, attempt
 	if retries := attempts - 1; retries > 0 {
 		k.jobsRetried.Inc()
 		k.retries.Add(float64(retries))
+	}
+}
+
+// JobDropped implements adaptivepool.Recorder
+func (r *Recorder) JobDropped(kind string) {
+	if s := r.state.Load(); s != nil {
+		s.series(kind).dropped.Inc()
 	}
 }
 

@@ -110,7 +110,8 @@ func (r *panicRecorder) JobCompleted(string, Status, int, time.Duration, time.Du
 	r.calls.Add(1)
 	panic("JobCompleted")
 }
-func (r *panicRecorder) ScaledUp(int) { r.calls.Add(1); panic("ScaledUp") }
+func (r *panicRecorder) JobDropped(string) { r.calls.Add(1); panic("JobDropped") }
+func (r *panicRecorder) ScaledUp(int)      { r.calls.Add(1); panic("ScaledUp") }
 
 type panicDetacher struct{ panicRecorder }
 

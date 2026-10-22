@@ -66,6 +66,7 @@ type fakeRecorder struct {
 	submitted []string
 	rejected  []string // kind/reason
 	completed []completedEvent
+	dropped   []string
 	scaledUp  []int
 
 	attachErr error
@@ -96,6 +97,12 @@ func (r *fakeRecorder) JobCompleted(kind string, status Status, attempts int, _,
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.completed = append(r.completed, completedEvent{kind, status, attempts})
+}
+
+func (r *fakeRecorder) JobDropped(kind string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.dropped = append(r.dropped, kind)
 }
 
 func (r *fakeRecorder) ScaledUp(added int) {

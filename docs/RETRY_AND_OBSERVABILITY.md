@@ -246,6 +246,7 @@ http.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
 | `adaptivepool_jobs_submitted_total` | counter | `pool`, `kind` | Incoming rate by task type |
 | `adaptivepool_jobs_rejected_total` | counter | `pool`, `kind`, `reason` | Overload: `timeout`, `canceled`, `queue_full` or `shutdown` |
 | `adaptivepool_jobs_completed_total` | counter | `pool`, `kind`, `status` | Throughput, and why tasks failed |
+| `adaptivepool_jobs_dropped_total` | counter | `pool`, `kind` | Queued tasks a forced shutdown discarded without running |
 | `adaptivepool_job_duration_seconds` | histogram | `pool`, `kind` | How long tasks take, including retries |
 | `adaptivepool_job_queue_wait_seconds` | histogram | `pool`, `kind` | How long tasks wait before starting |
 | `adaptivepool_jobs_retried_total` | counter | `pool`, `kind` | Tasks that needed at least one retry |
@@ -299,6 +300,7 @@ Every metric carries `adaptivepool.pool.name`.
 | `adaptivepool.queue.limit` | UpDownCounter | `{job}` | |
 | `adaptivepool.job.submissions` | Counter | `{submission}` | `adaptivepool.job.kind` |
 | `adaptivepool.job.rejections` | Counter | `{rejection}` | `adaptivepool.job.kind`, `adaptivepool.rejection.reason` |
+| `adaptivepool.job.dropped` | Counter | `{job}` | `adaptivepool.job.kind` |
 | `adaptivepool.job.duration` | Histogram | `s` | `adaptivepool.job.kind`, `adaptivepool.job.status` |
 | `adaptivepool.job.wait_time` | Histogram | `s` | `adaptivepool.job.kind` |
 | `adaptivepool.job.retries` | Counter | `{retry}` | `adaptivepool.job.kind` |
@@ -317,7 +319,7 @@ Every metric carries `adaptivepool.pool.name`.
 
 ### Writing your own recorder
 
-Implement four methods. They run on submitting and worker goroutines, so they
+Implement five methods. They run on submitting and worker goroutines, so they
 must be safe for concurrent use and fast:
 
 ```go
@@ -331,6 +333,9 @@ func (r statsdRecorder) JobRejected(kind string, reason adaptivepool.RejectReaso
 }
 func (r statsdRecorder) JobCompleted(kind string, status adaptivepool.Status, attempts int, wait, d time.Duration) {
     r.c.Timing("pool.duration", d, []string{"kind:" + kind, "status:" + string(status)}, 1)
+}
+func (r statsdRecorder) JobDropped(kind string) {
+    r.c.Incr("pool.dropped", []string{"kind:" + kind}, 1)
 }
 func (r statsdRecorder) ScaledUp(added int) {
     r.c.Count("pool.scale_up", int64(added), nil, 1)
@@ -388,6 +393,7 @@ m.BusyWorkers()    // workers executing a task
 m.JobsProcessed()  // finished tasks
 m.JobsFailed()     // finished with any non-success status
 m.JobsRejected()   // rejected at submission
+m.JobsDropped()    // queued tasks dropped by a forced shutdown
 m.JobsRetried()    // needed at least one retry
 m.RetryAttempts()  // total retries
 m.AvgJobLatency()  // mean execution time, including retries
@@ -400,7 +406,8 @@ m.AvgQueueWait()   // mean time spent queued
 
 `Submit` returns as soon as a task is queued, so your code otherwise has no way
 to learn how a task ended. `WithOnTaskDone` is called **exactly once per
-executed task**, whatever the outcome:
+executed task**, whatever the outcome, and once per queued task a forced
+shutdown drops (status `shutdown`, `Attempts` 0):
 
 ```go
 pool, _ := adaptivepool.New(
@@ -713,8 +720,12 @@ Panics are never wrapped. They surface as `*PanicError` with status `panic`.
 - **Forced** (`Shutdown`'s context expires): backoff waits, including
   zero-length ones, are aborted and the task finishes with status `shutdown`.
   A running attempt isn't interrupted. Each worker exits after its current
-  job without starting another from the queue, and the recorder is detached
-  once the last worker has exited.
+  job without starting another from the queue. Tasks still queued are
+  dropped: each is reported to `OnTaskDone` with status `shutdown`,
+  `Attempts` 0 and `ErrPoolShutdown`, and to the recorder's `JobDropped`.
+  `Shutdown` then returns a `*ShutdownError` with the `Dropped` count, which
+  wraps the context's error, so `errors.Is(err, context.DeadlineExceeded)`
+  still matches. The recorder is detached once the last worker has exited.
 - **Repeated calls:** the first call does the work. A later call returns the
   first call's result (for example `context.DeadlineExceeded` if it timed out),
   or its own `ctx` error if its `ctx` ends before the shutdown does.
@@ -769,7 +780,7 @@ Every finished task has exactly one `Status`. The same value appears in the
 | `budget_exceeded` | `MaxElapsedTime` would have been exceeded |
 | `permanent` | The job returned a `Permanent` error, with or without retries |
 | `canceled` | The job failed after its context was done, with or without retries |
-| `shutdown` | A forced shutdown aborted retrying |
+| `shutdown` | A forced shutdown aborted retrying, or dropped the task from the queue before it ran |
 
 ---
 

@@ -67,6 +67,24 @@ func (e *RetryError) Unwrap() []error {
 	return []error{e.Reason, e.Err}
 }
 
+// ShutdownError is returned by Shutdown when its context ended before the
+// queue drained. errors.Is matches the context's error.
+type ShutdownError struct {
+	// Dropped is the number of queued jobs that were discarded without running
+	Dropped int
+	// Err is the error of Shutdown's context
+	Err error
+}
+
+func (e *ShutdownError) Error() string {
+	return fmt.Sprintf("forced shutdown dropped %d queued job(s): %v", e.Dropped, e.Err)
+}
+
+// Unwrap returns the context's error
+func (e *ShutdownError) Unwrap() error {
+	return e.Err
+}
+
 // Permanent marks err as not retryable: the retry engine stops immediately.
 // Use it for failures that cannot succeed on retry, such as invalid input.
 // Permanent(nil) returns nil.

@@ -43,6 +43,9 @@ type Recorder interface {
 	// JobCompleted is called once per executed job with its final status,
 	// number of attempts, time spent queued and execution time
 	JobCompleted(kind string, status Status, attempts int, queueWait, duration time.Duration)
+	// JobDropped is called once per queued job that a forced shutdown
+	// discarded without running it
+	JobDropped(kind string)
 	// ScaledUp is called when the pool adds workers
 	ScaledUp(added int)
 }

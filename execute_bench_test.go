@@ -32,6 +32,7 @@ type noopRecorder struct{}
 func (noopRecorder) JobSubmitted(string)                                            {}
 func (noopRecorder) JobRejected(string, RejectReason)                               {}
 func (noopRecorder) JobCompleted(string, Status, int, time.Duration, time.Duration) {}
+func (noopRecorder) JobDropped(string)                                              {}
 func (noopRecorder) ScaledUp(int)                                                   {}
 
 func executeCases() []struct {

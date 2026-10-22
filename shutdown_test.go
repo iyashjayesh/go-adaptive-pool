@@ -2,6 +2,7 @@ package adaptivepool
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -72,9 +73,12 @@ func TestShutdownWithTimeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
+	// One job is running; the other four are still queued and get dropped
 	err = pool.Shutdown(ctx)
-	assert.Error(t, err)
-	assert.Equal(t, context.DeadlineExceeded, err)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	var se *ShutdownError
+	require.ErrorAs(t, err, &se)
+	assert.Equal(t, numJobs-1, se.Dropped)
 
 	// Cleanup
 	close(blockChan)
@@ -286,10 +290,74 @@ func TestForcedShutdownDoesNotStartQueuedJobs(t *testing.T) {
 			time.Sleep(20 * time.Millisecond) // forceStop is closed by now
 			close(release)
 		}()
-		require.NoError(t, p.Shutdown(ctx))
+		var se *ShutdownError
+		require.ErrorAs(t, p.Shutdown(ctx), &se)
 		cancel()
 		assert.Zero(t, started.Load(), "queued jobs started after a forced shutdown")
+		assert.Equal(t, 50, se.Dropped)
 	}
+}
+
+// A forced shutdown reports each queued job it drops through OnTaskDone, the
+// recorder and Shutdown's error, so callers can tell that work was lost.
+func TestForcedShutdownReportsDroppedJobs(t *testing.T) {
+	const queued = 10
+	release := make(chan struct{})
+	rec := &fakeRecorder{}
+	var mu sync.Mutex
+	var results []TaskResult
+	p, err := New(WithMinWorkers(1), WithMaxWorkers(1), WithQueueSize(queued),
+		WithLogger(discardLogger()), WithRecorder(rec),
+		WithOnTaskDone(func(r TaskResult) {
+			mu.Lock()
+			defer mu.Unlock()
+			results = append(results, r)
+		}))
+	require.NoError(t, err)
+
+	bg := context.Background()
+	require.NoError(t, p.SubmitTask(bg, Task{ID: "running", Kind: "k", Run: func(context.Context) error {
+		<-release
+		return nil
+	}}))
+	require.Eventually(t, func() bool { return p.Metrics().BusyWorkers() == 1 }, time.Second, time.Millisecond)
+	for i := range queued {
+		require.NoError(t, p.SubmitTask(bg, Task{ID: fmt.Sprint(i), Kind: "k", Run: func(context.Context) error { return nil }}))
+	}
+
+	ctx, cancel := context.WithTimeout(bg, 20*time.Millisecond)
+	defer cancel()
+	go func() {
+		<-ctx.Done()
+		time.Sleep(20 * time.Millisecond) // forceStop is closed by now
+		close(release)
+	}()
+	err = p.Shutdown(ctx)
+
+	var se *ShutdownError
+	require.ErrorAs(t, err, &se)
+	assert.Equal(t, queued, se.Dropped)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.ErrorIs(t, p.Shutdown(bg), context.DeadlineExceeded, "a later call should see the same result")
+	assert.Equal(t, int64(queued), p.Metrics().JobsDropped())
+	assert.Equal(t, int64(1), p.Metrics().JobsProcessed(), "dropped jobs aren't processed")
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, results, queued+1)
+	for _, r := range results {
+		if r.ID == "running" {
+			assert.Equal(t, StatusSuccess, r.Status)
+			continue
+		}
+		assert.Equal(t, StatusShutdown, r.Status)
+		assert.Zero(t, r.Attempts)
+		assert.ErrorIs(t, r.Err, ErrPoolShutdown)
+	}
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	assert.Len(t, rec.dropped, queued)
+	assert.Len(t, rec.completed, 1)
 }
 
 // Regression: a zero-length backoff skipped the forceStop check, so the retry

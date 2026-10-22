@@ -244,7 +244,7 @@ Shutdown behavior:
 1. Stops accepting new jobs (returns `ErrPoolShutdown`)
 2. Drains in-flight jobs within timeout
 3. Terminates all workers deterministically
-4. Returns error if jobs were dropped
+4. If the timeout expires, drops queued jobs (each reported to `OnTaskDone` with status `shutdown`) and returns a `*ShutdownError` with the count, which wraps the context error
 
 ## Examples
 

@@ -159,6 +159,17 @@ func TestJobOutcomes(t *testing.T) {
 	assert.Equal(t, int64(2), c.sum("adaptivepool.job.retries", pool, email))
 }
 
+func TestDroppedJobs(t *testing.T) {
+	c, mp := newCollector(t)
+	rec := New(mp)
+	require.NoError(t, rec.Attach(adaptivepool.PoolInfo{Name: "orders"}, stubStats{}))
+	defer rec.Detach()
+
+	rec.JobDropped("email")
+	rec.JobDropped("email")
+	assert.Equal(t, int64(2), c.sum("adaptivepool.job.dropped", PoolNameKey.String("orders"), JobKindKey.String("email")))
+}
+
 func TestRejections(t *testing.T) {
 	c, mp := newCollector(t)
 	p := newPool(t, adaptivepool.WithName("orders"), adaptivepool.WithMinWorkers(1), adaptivepool.WithMaxWorkers(1),
@@ -249,6 +260,7 @@ func (stubStats) BusyWorkers() int             { return 0 }
 func (stubStats) JobsProcessed() int64         { return 0 }
 func (stubStats) JobsFailed() int64            { return 0 }
 func (stubStats) JobsRejected() int64          { return 0 }
+func (stubStats) JobsDropped() int64           { return 0 }
 func (stubStats) JobsRetried() int64           { return 0 }
 func (stubStats) RetryAttempts() int64         { return 0 }
 func (stubStats) AvgJobLatency() time.Duration { return 0 }

@@ -49,6 +49,13 @@ func (p *pool) Shutdown(ctx context.Context) error {
 			// Abort retry backoff waits and stop idle workers
 			close(p.state.forceStop)
 
+			// Drop what is still queued. The queue is closed, so this ends
+			// once it is empty; a worker that took a job just before seeing
+			// forceStop drops that one itself.
+			for job := range p.state.jobQueue {
+				p.dropJob(job)
+			}
+
 			// Wait a bit more for workers to respond
 			select {
 			case <-workersDone:
@@ -60,16 +67,19 @@ func (p *pool) Shutdown(ctx context.Context) error {
 			}
 		}
 
+		dropped := p.metrics.JobsDropped()
+		if dropped > 0 {
+			p.state.shutdownErr = &ShutdownError{Dropped: int(dropped), Err: ctx.Err()}
+		}
+
 		p.detachRecorder(workersDone, drained)
 
 		// Transition to terminated state
 		p.state.setShutdownState(shutdownStateTerminated)
 		close(p.state.shutdownDone)
 
-		// Check if there are any jobs left in the queue
-		remainingJobs := p.state.getQueueDepth()
-		if remainingJobs > 0 {
-			p.logger.Warn("shutdown complete with jobs remaining in queue", slog.Int("remaining", remainingJobs))
+		if dropped > 0 {
+			p.logger.Warn("shutdown complete, dropped queued jobs", slog.Int64("dropped", dropped))
 		} else {
 			p.logger.Info("shutdown complete, all jobs processed")
 		}

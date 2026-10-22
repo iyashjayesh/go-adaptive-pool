@@ -248,6 +248,7 @@ func (stubStats) BusyWorkers() int             { return 0 }
 func (stubStats) JobsProcessed() int64         { return 0 }
 func (stubStats) JobsFailed() int64            { return 0 }
 func (stubStats) JobsRejected() int64          { return 0 }
+func (stubStats) JobsDropped() int64           { return 0 }
 func (stubStats) JobsRetried() int64           { return 0 }
 func (stubStats) RetryAttempts() int64         { return 0 }
 func (stubStats) AvgJobLatency() time.Duration { return 0 }
@@ -283,6 +284,16 @@ func TestAttachDetachWhileRecording(t *testing.T) {
 	wg.Wait()
 }
 
+func TestDroppedJobs(t *testing.T) {
+	rec := New(prometheus.NewRegistry())
+	require.NoError(t, rec.Attach(adaptivepool.PoolInfo{Name: "p"}, stubStats{}))
+	defer rec.Detach()
+
+	rec.JobDropped("email")
+	rec.JobDropped("email")
+	assert.Equal(t, 2.0, testutil.ToFloat64(rec.state.Load().jobsDropped.WithLabelValues("email")))
+}
+
 func TestEventsAfterDetachAreDropped(t *testing.T) {
 	rec := New(prometheus.NewRegistry())
 	require.NoError(t, rec.Attach(adaptivepool.PoolInfo{}, stubStats{}))
@@ -292,6 +303,7 @@ func TestEventsAfterDetachAreDropped(t *testing.T) {
 	rec.JobSubmitted("k")
 	rec.JobRejected("k", adaptivepool.RejectTimeout)
 	rec.JobCompleted("k", adaptivepool.StatusSuccess, 1, 0, 0)
+	rec.JobDropped("k")
 	rec.ScaledUp(1)
 	assert.Nil(t, rec.state.Load())
 }

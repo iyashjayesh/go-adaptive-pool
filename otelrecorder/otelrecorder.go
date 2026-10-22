@@ -74,6 +74,7 @@ type state struct {
 	poolAttr     attribute.KeyValue
 	submissions  metric.Int64Counter
 	rejections   metric.Int64Counter
+	dropped      metric.Int64Counter
 	duration     metric.Float64Histogram
 	waitTime     metric.Float64Histogram
 	retries      metric.Int64Counter
@@ -134,6 +135,10 @@ func (r *Recorder) register(info adaptivepool.PoolInfo, stats adaptivepool.Metri
 	}
 	if s.rejections, err = meter.Int64Counter("adaptivepool.job.rejections",
 		metric.WithUnit("{rejection}"), metric.WithDescription("Jobs rejected at submission")); err != nil {
+		return nil, err
+	}
+	if s.dropped, err = meter.Int64Counter("adaptivepool.job.dropped",
+		metric.WithUnit("{job}"), metric.WithDescription("Queued jobs a forced shutdown discarded without running")); err != nil {
 		return nil, err
 	}
 	if s.duration, err = meter.Float64Histogram("adaptivepool.job.duration",
@@ -269,6 +274,13 @@ func (r *Recorder) JobCompleted(kind string, status adaptivepool.Status, attempt
 	s.waitTime.Record(ctx, queueWait.Seconds(), o.record...)
 	if retries := attempts - 1; retries > 0 {
 		s.retries.Add(ctx, int64(retries), o.add...)
+	}
+}
+
+// JobDropped implements adaptivepool.Recorder
+func (r *Recorder) JobDropped(kind string) {
+	if s := r.state.Load(); s != nil {
+		s.dropped.Add(context.Background(), 1, s.options(kind).add...)
 	}
 }
 

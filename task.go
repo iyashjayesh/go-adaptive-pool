@@ -59,7 +59,8 @@ const (
 	// StatusPermanent means the job returned an error wrapped with Permanent,
 	// with or without retries
 	StatusPermanent Status = "permanent"
-	// StatusShutdown means retrying was aborted by a forced pool shutdown
+	// StatusShutdown means a forced pool shutdown aborted retrying, or dropped
+	// the task from the queue before it ran (Attempts is 0)
 	StatusShutdown Status = "shutdown"
 	// StatusCanceled means the job failed after its context was done
 	StatusCanceled Status = "canceled"

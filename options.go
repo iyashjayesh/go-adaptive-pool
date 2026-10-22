@@ -92,7 +92,7 @@ func WithName(name string) Option {
 }
 
 // WithOnTaskDone sets a hook called exactly once per executed task, whatever
-// the outcome. It lets application code react to results (dead-letter queues,
+// the outcome, and once per queued task dropped by a forced shutdown. It lets application code react to results (dead-letter queues,
 // status updates, tracing) since Submit returns before the task runs.
 //
 // The hook runs synchronously on the worker goroutine, so keep it fast and

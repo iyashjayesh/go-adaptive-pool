@@ -3,7 +3,7 @@ module github.com/iyashjayesh/go-adaptive-pool/otelrecorder
 go 1.25.0
 
 require (
-	github.com/iyashjayesh/go-adaptive-pool v0.0.0
+	github.com/iyashjayesh/go-adaptive-pool v0.1.0
 	github.com/stretchr/testify v1.12.1
 	go.opentelemetry.io/otel v1.46.0
 	go.opentelemetry.io/otel/metric v1.46.0
@@ -22,7 +22,3 @@ require (
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 )
-
-// The core has no release with the Recorder API yet. Remove this before
-// tagging, once go.mod requires a published core version (see CONTRIBUTING.md).
-replace github.com/iyashjayesh/go-adaptive-pool => ../

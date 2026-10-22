@@ -3,7 +3,7 @@ module github.com/iyashjayesh/go-adaptive-pool/promrecorder
 go 1.25.0
 
 require (
-	github.com/iyashjayesh/go-adaptive-pool v0.0.0
+	github.com/iyashjayesh/go-adaptive-pool v0.1.0
 	github.com/prometheus/client_golang v1.23.2
 	github.com/stretchr/testify v1.12.1
 	go.uber.org/goleak v1.3.0
@@ -23,7 +23,3 @@ require (
 	golang.org/x/sys v0.47.0 // indirect
 	google.golang.org/protobuf v1.36.8 // indirect
 )
-
-// The core has no release with the Recorder API yet. Remove this before
-// tagging, once go.mod requires a published core version (see CONTRIBUTING.md).
-replace github.com/iyashjayesh/go-adaptive-pool => ../

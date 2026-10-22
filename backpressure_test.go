@@ -225,3 +225,138 @@ func TestConcurrentSubmissions(t *testing.T) {
 
 	assert.Equal(t, int64(expectedJobs), pool.Metrics().JobsProcessed())
 }
+
+// Regression: with an already-expired submit context and Task.Context set,
+// SubmitTask raced the queue send against ctx.Done() and rejected about half
+// of submissions at random even though the queue had space.
+func TestSubmitPrefersQueueSpaceOverDoneContext(t *testing.T) {
+	p := newTestPool(t, WithMinWorkers(1), WithMaxWorkers(1), WithQueueSize(1000), WithLogger(discardLogger()))
+
+	release := make(chan struct{})
+	defer close(release)
+	task := Task{Context: context.Background(), Run: func(context.Context) error { //nolint:unparam
+		<-release
+		return nil
+	}}
+
+	for i := range 1000 {
+		ctx, cancel := context.WithTimeout(context.Background(), 0)
+		err := p.SubmitTask(ctx, task)
+		cancel()
+		require.NoError(t, err, "submit %d rejected with queue space available", i)
+	}
+
+	// The worker holds one job; refill its slot so the queue is full
+	require.Eventually(t, func() bool { return p.Metrics().BusyWorkers() == 1 }, time.Second, time.Millisecond)
+	require.NoError(t, p.SubmitTask(context.Background(), task))
+
+	// Once the queue is full, a done context rejects immediately
+	ctx, cancel := context.WithTimeout(context.Background(), 0)
+	defer cancel()
+	assert.ErrorIs(t, p.SubmitTask(ctx, task), ErrTimeout)
+}
+
+// Regression: a done ctx that is also the job's context was queued, so the
+// job started with a cancelled context and could still report success.
+func TestSubmitRejectsDoneContextUsedAsJobContext(t *testing.T) {
+	rec := &fakeRecorder{}
+	p := newTestPool(t, WithLogger(discardLogger()), WithRecorder(rec))
+	var ran atomic.Int64
+	run := func(context.Context) error { ran.Add(1); return nil } //nolint:unparam
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	expired, cancelExpired := context.WithTimeout(context.Background(), 0)
+	defer cancelExpired()
+
+	for _, submit := range []func(context.Context) error{
+		func(ctx context.Context) error { return p.Submit(ctx, run) },
+		func(ctx context.Context) error { return p.SubmitTask(ctx, Task{Kind: "k", Run: run}) },
+		func(ctx context.Context) error { return p.TrySubmit(ctx, Task{Kind: "k", Run: run}) },
+	} {
+		assert.ErrorIs(t, submit(canceled), context.Canceled)
+		assert.ErrorIs(t, submit(expired), ErrTimeout)
+	}
+
+	time.Sleep(20 * time.Millisecond)
+	assert.Zero(t, ran.Load(), "no job should have been queued")
+	assert.Equal(t, int64(6), p.Metrics().JobsRejected())
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	assert.Empty(t, rec.submitted)
+	assert.Equal(t, []string{
+		"default/canceled", "default/timeout", "k/canceled", "k/timeout", "k/canceled", "k/timeout",
+	}, rec.rejected)
+}
+
+func TestTrySubmitQueueFull(t *testing.T) {
+	rec := &fakeRecorder{}
+	p := newTestPool(t, WithMinWorkers(1), WithMaxWorkers(1), WithQueueSize(1), WithLogger(discardLogger()), WithRecorder(rec))
+
+	release := make(chan struct{})
+	defer close(release)
+	block := func(context.Context) error { //nolint:unparam
+		<-release
+		return nil
+	}
+
+	ctx := context.Background()
+	require.NoError(t, p.TrySubmit(ctx, Task{Run: block}))
+	require.Eventually(t, func() bool { return p.Metrics().BusyWorkers() == 1 }, time.Second, time.Millisecond)
+	require.NoError(t, p.TrySubmit(ctx, Task{Run: block}))
+
+	assert.ErrorIs(t, p.TrySubmit(ctx, Task{Kind: "email", Run: block}), ErrQueueFull)
+	assert.Equal(t, int64(1), p.Metrics().JobsRejected())
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	assert.Equal(t, []string{"email/queue_full"}, rec.rejected)
+}
+
+func TestTrySubmitContext(t *testing.T) {
+	p := newTestPool(t, WithLogger(discardLogger()))
+
+	type key struct{}
+	got := make(chan any, 2)
+	run := func(ctx context.Context) error {
+		got <- ctx.Value(key{})
+		return nil
+	}
+
+	ctx := context.WithValue(context.Background(), key{}, "submit")
+	require.NoError(t, p.TrySubmit(ctx, Task{Run: run}))
+	assert.Equal(t, "submit", <-got)
+
+	taskCtx := context.WithValue(context.Background(), key{}, "task")
+	require.NoError(t, p.TrySubmit(ctx, Task{Run: run, Context: taskCtx}))
+	assert.Equal(t, "task", <-got)
+}
+
+func TestTrySubmitErrors(t *testing.T) {
+	p, err := New(WithLogger(discardLogger()))
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	assert.ErrorIs(t, p.TrySubmit(ctx, Task{}), ErrNilJob)
+	require.NoError(t, p.Shutdown(ctx))
+	assert.ErrorIs(t, p.TrySubmit(ctx, Task{Run: func(context.Context) error { return nil }}), ErrPoolShutdown)
+}
+
+// Regression: ErrTimeout was a plain error, so a timed-out submission didn't
+// match context.DeadlineExceeded although a cancelled one matched
+// context.Canceled.
+func TestErrTimeoutWrapsDeadlineExceeded(t *testing.T) {
+	assert.ErrorIs(t, ErrTimeout, context.DeadlineExceeded)
+
+	p := newTestPool(t, WithLogger(discardLogger()))
+	ctx, cancel := context.WithTimeout(context.Background(), 0)
+	defer cancel()
+	err := p.Submit(ctx, func(context.Context) error { return nil })
+
+	assert.Equal(t, ErrTimeout, err, "the sentinel itself is still returned")
+	assert.ErrorIs(t, err, ErrTimeout)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	var timeout interface{ Timeout() bool }
+	require.ErrorAs(t, err, &timeout)
+	assert.True(t, timeout.Timeout(), "callers that look for a Timeout() method see it too")
+	assert.NotErrorIs(t, err, context.Canceled)
+}

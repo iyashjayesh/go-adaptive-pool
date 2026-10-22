@@ -3,20 +3,41 @@ package adaptivepool
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 )
 
 // Pool represents a worker pool that can execute jobs concurrently
 type Pool interface {
-	// Submit Submits a job to the pool for execution
-	// Returns ErrPoolShutdown if the pool is shutdown
-	// Blocks until the job is enqueued or context is cancelled
+	// Submit submits a job to the pool for execution. If the queue is full
+	// it blocks until there is space, ctx is done or the pool shuts down.
+	// ctx is also the context the job runs with; use SubmitTask with
+	// Task.Context to give the job a different one.
+	//
+	// It returns ErrNilJob for a nil job, ErrPoolShutdown once Shutdown has
+	// started, ErrTimeout if ctx's deadline passes while waiting, and
+	// context.Canceled if ctx is cancelled while waiting. A ctx that is
+	// already done is rejected the same way, without queueing, unless
+	// Task.Context is set.
 	Submit(ctx context.Context, job Job) error
+
+	// SubmitTask is like Submit but carries a task ID and kind for logs and
+	// metrics, and an optional execution context separate from ctx. It
+	// returns the same errors as Submit.
+	SubmitTask(ctx context.Context, task Task) error
+
+	// TrySubmit is like SubmitTask but never waits: if the queue is full it
+	// returns ErrQueueFull. ctx is only the job's context, used when
+	// task.Context is nil.
+	TrySubmit(ctx context.Context, task Task) error
 
 	// Shutdown gracefully shuts down the pool
 	// Waits for in-flight jobs to complete within the context timeout
+	// If ctx ends first, jobs still queued are dropped without running, each
+	// reported with StatusShutdown, and it returns a *ShutdownError.
+	// It may be called more than once: later calls return the first call's
+	// result, or ctx's error if ctx ends before the shutdown does
 	Shutdown(ctx context.Context) error
 
 	// Metrics returns the pool metrics
@@ -28,6 +49,9 @@ type pool struct {
 	config  *Config
 	state   *poolState
 	metrics *metrics
+	logger  *slog.Logger
+	retrier *retrier  // nil when retries are disabled
+	epoch   time.Time // monotonic reference for queue wait timing
 
 	// Dispatcher coordination
 	dispatcherWg     sync.WaitGroup
@@ -51,8 +75,14 @@ func New(options ...Option) (Pool, error) {
 	// creating pool state
 	state := newPoolState(config.queueSize)
 
-	// creating metrics
-	metrics := newMetrics(state, config.metricsEnabled, "adaptivepool")
+	logger := newLogger(config)
+	metrics := newMetrics(state, config.recorder, logger)
+	if a, ok := config.recorder.(Attacher); ok {
+		info := PoolInfo{Name: config.name, MinWorkers: config.minWorkers, MaxWorkers: config.maxWorkers, QueueSize: config.queueSize}
+		if err := a.Attach(info, metrics); err != nil {
+			return nil, fmt.Errorf("attaching metrics recorder: %w", err)
+		}
+	}
 
 	// creating dispatcher context
 	dispatcherCtx, dispatcherCancel := context.WithCancel(context.Background())
@@ -61,8 +91,14 @@ func New(options ...Option) (Pool, error) {
 		config:           config,
 		state:            state,
 		metrics:          metrics,
+		logger:           logger,
+		epoch:            time.Now(),
 		dispatcherCtx:    dispatcherCtx,
 		dispatcherCancel: dispatcherCancel,
+	}
+
+	if config.retry != nil {
+		p.retrier = newRetrier(*config.retry, p.logger, state.forceStop)
 	}
 
 	// Start the dispatcher
@@ -75,6 +111,18 @@ func New(options ...Option) (Pool, error) {
 	}
 
 	return p, nil
+}
+
+// newLogger resolves the configured logger and binds the pool name to it
+func newLogger(c *Config) *slog.Logger {
+	l := c.logger
+	if l == nil {
+		l = slog.Default()
+	}
+	if c.name != "" {
+		l = l.With(slog.String("pool", c.name))
+	}
+	return l
 }
 
 // Metrics returns the pool metrics
@@ -96,9 +144,6 @@ func (p *pool) runDispatcher() {
 	scaleTicker := time.NewTicker(1 * time.Second)
 	defer scaleTicker.Stop()
 
-	metricsTicker := time.NewTicker(5 * time.Second)
-	defer metricsTicker.Stop()
-
 	for {
 		select {
 		case <-p.dispatcherCtx.Done():
@@ -108,10 +153,6 @@ func (p *pool) runDispatcher() {
 		case <-scaleTicker.C:
 			// Check if we need to scale
 			p.checkScaling()
-
-		case <-metricsTicker.C:
-			// Update gauge metrics
-			p.metrics.updateGauges()
 		}
 	}
 }
@@ -126,13 +167,18 @@ func (p *pool) runWorker(id int) {
 
 	for {
 		select {
-		case <-p.state.workerShutdown:
-			// Shutdown signal received
+		case <-p.state.forceStop:
+			// Forced shutdown: stop without draining the queue
 			return
 
 		case job, ok := <-p.state.jobQueue:
 			if !ok {
 				// Queue closed, shutdown
+				return
+			}
+			// select picks at random when forceStop and the queue are both ready
+			if closed(p.state.forceStop) {
+				p.dropJob(job)
 				return
 			}
 
@@ -158,26 +204,6 @@ func (p *pool) runWorker(id int) {
 			// Reset timer if we're at minimum
 			idleTimer.Reset(p.config.scaleDownIdleDuration)
 		}
-	}
-}
-
-// executeJob executes a job with panic recovery and metrics
-func (p *pool) executeJob(workerID int, job jobWrapper) {
-	start := time.Now()
-
-	defer func() {
-		if r := recover(); r != nil {
-			log.Printf("worker %d: panic executing job %d: %v", workerID, job.id, r)
-		}
-
-		// Record metrics
-		latency := time.Since(start)
-		p.metrics.recordJobProcessed(latency)
-	}()
-
-	// Execute the job
-	if err := job.job(job.ctx); err != nil {
-		log.Printf("worker %d: job %d failed: %v", workerID, job.id, err)
 	}
 }
 
@@ -216,5 +242,6 @@ func (p *pool) scaleUp() {
 	}
 
 	p.state.lastScaleUp = time.Now()
-	log.Printf("scaled up: added %d workers (total: %d)", toAdd, p.state.getWorkerCount())
+	p.metrics.recordScaleUp(toAdd)
+	p.logger.Info("scaled up", slog.Int("added", toAdd), slog.Int("workers", p.state.getWorkerCount()))
 }

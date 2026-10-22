@@ -20,7 +20,8 @@ It provides:
 - Bounded concurrency via a fixed-size queue
 - Adaptive worker lifecycle. Workers scale up and down based on queue pressure
 - Explicit backpressure. When the queue is full, submissions block or fail fast
-- Observability via built-in Prometheus metrics
+- Observability via vendor-agnostic metrics (Prometheus and OpenTelemetry recorders included), structured `slog` logs and an `OnTaskDone` hook
+- Inline retries with pluggable backoff, jitter and time budgets
 - Safe shutdown with graceful draining and no goroutine leaks
 
 The `adaptive` behavior here is worker lifecycle adaptation, not request-level concurrency control.
@@ -34,10 +35,15 @@ The `adaptive` behavior here is worker lifecycle adaptation, not request-level c
 - *Explicit backpressure*
     - When overloaded, submissions block or are rejected. The caller must handle it.
 - *Observability*
-    - Built-in Prometheus metrics:
-        - queue depth
-        - throughput
-        - latency
+    - Metrics per pool and task kind: workers (active/busy), queue depth and wait, throughput, execution time, failures by reason, retries
+    - No metrics dependency in the core: plug in the bundled Prometheus or OpenTelemetry recorder, or your own
+    - Structured `log/slog` logging with task ID, kind, status and attempts
+    - `OnTaskDone` hook to react to each task's outcome (dead-letter queues, tracing)
+    - Ready-made Grafana dashboard in [`examples/observability`](examples/observability)
+- *Retries*
+    - Run inline on the worker (no re-queueing, no extra goroutines), zero allocations on the hot path
+    - Constant, linear and exponential backoff, full jitter, per-wait cap and total time budget
+    - `Permanent` errors, `RetryAfter` hints and per-error attempt limits
 - *Safe shutdown*
     - Graceful draining of queued jobs and clean worker shutdown with no leaks.
 
@@ -45,6 +51,13 @@ The `adaptive` behavior here is worker lifecycle adaptation, not request-level c
 
 ```bash
 go get github.com/iyashjayesh/go-adaptive-pool
+```
+
+The core has no dependency on Prometheus or OpenTelemetry. The metrics adapters are separate modules; add the one you use:
+
+```bash
+go get github.com/iyashjayesh/go-adaptive-pool/promrecorder   # Prometheus
+go get github.com/iyashjayesh/go-adaptive-pool/otelrecorder   # OpenTelemetry
 ```
 
 ## Quick Start
@@ -107,8 +120,20 @@ pool, err := adaptivepool.New(
     // Cooldown between scaling operations (default: 5s)
     adaptivepool.WithScaleCooldown(3*time.Second),
     
-    // Enable/disable metrics (default: true)
-    adaptivepool.WithMetricsEnabled(true),
+    // Name attached to logs and metrics (default: "")
+    adaptivepool.WithName("orders"),
+
+    // Export metrics: promrecorder, otelrecorder or your own (default: none)
+    adaptivepool.WithRecorder(promrecorder.New(prometheus.DefaultRegisterer)),
+
+    // Structured logger (default: slog.Default())
+    adaptivepool.WithLogger(slog.New(slog.NewJSONHandler(os.Stdout, nil))),
+
+    // Called once per finished task (default: none)
+    adaptivepool.WithOnTaskDone(func(r adaptivepool.TaskResult) { /* ... */ }),
+
+    // Retry failed jobs (default: disabled)
+    adaptivepool.WithRetry(adaptivepool.RetryPolicy{MaxAttempts: 3}),
 )
 ```
 
@@ -118,35 +143,89 @@ The pool enforces backpressure when the queue is full:
 
 ```go
 // Block until capacity is available
-ctx := context.Background()
-err := pool.Submit(ctx, job)
+err := pool.Submit(context.Background(), job)
 
-// Timeout after 5 seconds
-ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+// Wait at most 5 seconds for capacity
+waitCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 defer cancel()
-err := pool.Submit(ctx, job)
-if err == adaptivepool.ErrTimeout {
+err := pool.SubmitTask(waitCtx, adaptivepool.Task{
+    Context: context.Background(), // the job's own context, unaffected by waitCtx
+    Run:     job,
+})
+if errors.Is(err, adaptivepool.ErrTimeout) {
     // Handle overload
 }
 
-// Return immediately if full
-ctx, cancel := context.WithTimeout(context.Background(), 0)
-defer cancel()
-err := pool.Submit(ctx, job)
+// Don't wait at all if the queue is full
+err := pool.TrySubmit(context.Background(), adaptivepool.Task{Run: job})
+if errors.Is(err, adaptivepool.ErrQueueFull) {
+    // Drop or handle overload
+}
 ```
 
-## Metrics
+The context passed to `Submit` is also the context the job runs with, so a
+wait deadline on it would also cancel the job. `Task.Context` separates the
+two; see [Submit context vs execution context](docs/RETRY_AND_OBSERVABILITY.md#submit-context-vs-execution-context).
 
-Access pool metrics for observability:
+## Retries
+
+```go
+pool, _ := adaptivepool.New(
+    adaptivepool.WithRetry(adaptivepool.RetryPolicy{
+        MaxAttempts:    5,
+        Backoff:        adaptivepool.ExponentialBackoff{Base: 100 * time.Millisecond},
+        MaxDelay:       2 * time.Second,
+        MaxElapsedTime: 10 * time.Second,
+        Jitter:         true,
+    }),
+)
+
+job := func(ctx context.Context) error {
+    if err := validate(req); err != nil {
+        return adaptivepool.Permanent(err) // never retried
+    }
+    return callAPI(ctx) // retried with backoff
+}
+```
+
+See the [Retries and Observability guide](docs/RETRY_AND_OBSERVABILITY.md) for every option and its use case.
+
+## Observability
+
+Identify tasks so logs and metrics can tell them apart:
+
+```go
+pool.SubmitTask(ctx, adaptivepool.Task{
+    ID:   "order-8812",  // unique: logs and OnTaskDone only
+    Kind: "send_email",  // bounded: metric label
+    Run:  sendEmail,
+})
+```
+
+Export metrics through a recorder. With Prometheus, plot them with the bundled [Grafana dashboard](examples/observability):
+
+```go
+reg := prometheus.NewRegistry()
+pool, _ := adaptivepool.New(
+    adaptivepool.WithName("orders"),
+    adaptivepool.WithRecorder(promrecorder.New(reg)),
+)
+http.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
+```
+
+With OpenTelemetry, use `otelrecorder.New(meterProvider)` instead; any other backend needs a four-method `Recorder`. See [Metrics](docs/RETRY_AND_OBSERVABILITY.md#metrics).
+
+In-process metrics are always available:
 
 ```go
 metrics := pool.Metrics()
 
 fmt.Printf("Queue Depth: %d\n", metrics.QueueDepth())
-fmt.Printf("Active Workers: %d\n", metrics.ActiveWorkers())
-fmt.Printf("Jobs Processed: %d\n", metrics.JobsProcessed())
+fmt.Printf("Active / Busy Workers: %d / %d\n", metrics.ActiveWorkers(), metrics.BusyWorkers())
+fmt.Printf("Jobs Processed / Failed: %d / %d\n", metrics.JobsProcessed(), metrics.JobsFailed())
 fmt.Printf("Jobs Rejected: %d\n", metrics.JobsRejected())
-fmt.Printf("Avg Latency: %v\n", metrics.AvgJobLatency())
+fmt.Printf("Retries: %d\n", metrics.RetryAttempts())
+fmt.Printf("Avg Latency / Queue Wait: %v / %v\n", metrics.AvgJobLatency(), metrics.AvgQueueWait())
 ```
 
 ## Graceful Shutdown
@@ -165,7 +244,7 @@ Shutdown behavior:
 1. Stops accepting new jobs (returns `ErrPoolShutdown`)
 2. Drains in-flight jobs within timeout
 3. Terminates all workers deterministically
-4. Returns error if jobs were dropped
+4. If the timeout expires, drops queued jobs (each reported to `OnTaskDone` with status `shutdown`) and returns a `*ShutdownError` with the count, which wraps the context error
 
 ## Examples
 
@@ -192,6 +271,15 @@ See [examples/batch_processor](examples/batch_processor/main.go) for processing 
 ```bash
 cd examples/batch_processor
 go run main.go
+```
+
+### Observability with Prometheus and Grafana
+
+See [examples/observability](examples/observability) for a pool under bursty load with retries, plus a Prometheus and Grafana stack with a provisioned dashboard:
+
+```bash
+make run-observability
+cd examples/observability && docker compose up   # Grafana on http://localhost:3000
 ```
 
 ## Scope and non-goals
@@ -280,7 +368,7 @@ Producer → Submit(ctx) → Bounded Queue → Dispatcher → Adaptive Workers �
 Key components:
 - **Bounded Queue**: Buffered channel with fixed capacity
 - **Dispatcher**: Routes jobs to workers and monitors scaling
-- **Workers**: Execute jobs with panic recovery and metrics tracking
+- **Workers**: Execute jobs with panic recovery, inline retries and metrics tracking
 - **Scaling Logic**: Adjusts worker count based on queue utilization
 
 ## Comparison with Other Libraries
@@ -289,23 +377,24 @@ Key components:
 |---------|-----------------|------|------|----------|
 | Adaptive Scaling | Yes | No | Yes | No |
 | Explicit Backpressure | Yes | Partial | Partial | No |
-| Prometheus Metrics | Yes | No | No | No |
+| Prometheus / OpenTelemetry Metrics | Yes | No | No | No |
 | Graceful Shutdown | Yes | Yes | Yes | Yes |
 | Context Support | Yes | Partial | Yes | Yes |
 | Zero Global State | Yes | No | Yes | Yes |
 
 ## Testing
 
-Run tests with race detector:
+The repository has four Go modules (the core, `promrecorder`, `otelrecorder` and `examples/observability`), and `./...` does not cross module boundaries. `make test` runs every module with the race detector:
+
+```bash
+make test
+```
+
+To test one module, run `go test` inside its directory:
 
 ```bash
 go test -race -v ./...
-```
-
-Run with coverage:
-
-```bash
-go test -race -coverprofile=coverage.out ./...
+cd promrecorder && go test -race -coverprofile=coverage.out ./...
 go tool cover -html=coverage.out
 ```
 
@@ -326,6 +415,7 @@ Inspired by:
 
 ## Related Documentation
 
+- [Retries and Observability](docs/RETRY_AND_OBSERVABILITY.md) - Retry policy, logging, metrics and hooks
 - [Examples](examples/) - Complete working examples
 - [Benchmarks](.) - Performance comparisons
 

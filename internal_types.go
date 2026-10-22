@@ -13,9 +13,10 @@ type Job func(ctx context.Context) error
 // jobWrapper wraps a job with metadata for tracking
 type jobWrapper struct {
 	job         Job
-	SubmittedAt time.Time
-	id          uint64
 	ctx         context.Context
+	taskID      string
+	kind        string
+	submittedAt int64 // nanoseconds since pool.epoch
 }
 
 // shutdownState represents the shutdown state of the pool
@@ -33,32 +34,47 @@ type poolState struct {
 	jobQueue chan jobWrapper
 
 	// Worker management
-	workerWg       sync.WaitGroup
-	workerCount    atomic.Int32
-	workerShutdown chan struct{}
+	workerWg    sync.WaitGroup
+	workerCount atomic.Int32
+	busyWorkers atomic.Int32
 
-	// Shutdown coordination
-	shutdownOnce  sync.Once
-	shutdownState atomic.Int32
-	shutdownDone  chan struct{}
+	// Shutdown coordination. Submit holds submitMu for reading while it
+	// checks the state and sends; Shutdown takes it for writing to close the
+	// queue, so no send can race the close. closing wakes Submits blocked on a
+	// full queue so they release the lock.
+	shutdownStarted atomic.Bool // set by the first Shutdown call, which runs it
+	shutdownErr     error       // its result, written before shutdownDone is closed
+	shutdownState   atomic.Int32
+	shutdownDone    chan struct{}
+	closing         chan struct{} // closed when Shutdown starts
+	forceStop       chan struct{} // closed when Shutdown's context expires
+	submitMu        sync.RWMutex
 
 	// Scaling coordination
 	scalingMu   sync.Mutex
 	lastScaleUp time.Time
-
-	// Job ID generation
-	nextJobID atomic.Uint64
 }
 
 // newPoolState Creates a new pool state
 func newPoolState(queueSize int) *poolState {
 	ps := &poolState{
-		jobQueue:       make(chan jobWrapper, queueSize),
-		workerShutdown: make(chan struct{}),
-		shutdownDone:   make(chan struct{}),
+		jobQueue:     make(chan jobWrapper, queueSize),
+		shutdownDone: make(chan struct{}),
+		closing:      make(chan struct{}),
+		forceStop:    make(chan struct{}),
 	}
 	ps.shutdownState.Store(int32(shutdownStateRunning))
 	return ps
+}
+
+// closed reports whether c is closed, without blocking
+func closed(c <-chan struct{}) bool {
+	select {
+	case <-c:
+		return true
+	default:
+		return false
+	}
 }
 
 // isShutdown returns true if the pool is shutdown or draining
@@ -104,9 +120,4 @@ func (ps *poolState) getQueueUtilization() float64 {
 		return 0.0
 	}
 	return float64(ps.getQueueDepth()) / float64(capacity)
-}
-
-// nextID generates the next job ID
-func (ps *poolState) nextID() uint64 {
-	return ps.nextJobID.Add(1)
 }

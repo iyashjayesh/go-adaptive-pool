@@ -18,6 +18,12 @@ The heavy-duty simulation used for the 1M RPS benchmarks.
 - with-pool: runs with protection enabled.
 - without-pool: runs the naive version (caution: uses lots of RAM).
 
+### 4. Observability (/observability)
+A named pool under bursty load with retries, plus Prometheus and Grafana.
+- Shows retries, `Permanent` errors, `RetryAfter` hints and per-error limits.
+- Serves Prometheus metrics on :2112 and logs failures as JSON.
+- `docker compose up` starts Prometheus and Grafana with a ready-made dashboard.
+
 ---
 
 ## Running the examples
@@ -27,5 +33,6 @@ You can use the Makefile in the root directory to run these:
 ```bash
 make run-http
 make run-batch
+make run-observability
 make run-comparison
 ```

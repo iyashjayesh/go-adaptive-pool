@@ -1,7 +1,9 @@
 package adaptivepool
 
 import (
+	"math"
 	"runtime"
+	"runtime/debug"
 )
 
 // WorkloadProfile represents predefined workload types
@@ -34,34 +36,47 @@ type SystemAwareConfig struct {
 	WorkloadType WorkloadType
 	// TargetLatencyMs is the target latency in milliseconds
 	TargetLatencyMs int
-	// AvgJobMemoryBytes is the average memory consumed per job
+	// AvgJobMemoryBytes is the average memory held by a queued job. With a
+	// memory limit (see MemoryLimitPercent), it sizes the queue to fit.
 	AvgJobMemoryBytes int64
-	// MemoryLimitPercent is the percentage of available memory to use (0.0 to 1.0)
+	// MemoryLimitPercent is the fraction (0.0 to 1.0] of the process memory
+	// limit the queue may use. The limit is GOMEMLIMIT when set, otherwise the
+	// container's cgroup memory limit on Linux. Without either, the queue
+	// isn't sized by memory and the workload type's default is used.
 	MemoryLimitPercent float64
 }
 
-// systemResources holds detected system resource information
+// systemResources holds the resources available to this process
 type systemResources struct {
-	numCPU          int
-	totalMemory     uint64
-	availableMemory uint64
+	// numCPU is GOMAXPROCS, which honours container CPU limits on Linux
+	numCPU int
+	// memoryLimit is the process memory limit in bytes, 0 when there is none
+	memoryLimit uint64
 }
 
-// detectSystemResources detects available system resources
+// detectSystemResources detects the resources available to this process
 func detectSystemResources() systemResources {
-	var memStats runtime.MemStats
-	runtime.ReadMemStats(&memStats)
-
 	return systemResources{
-		numCPU:          runtime.NumCPU(),
-		totalMemory:     memStats.Sys,
-		availableMemory: memStats.Sys - memStats.Alloc,
+		numCPU:      runtime.GOMAXPROCS(0),
+		memoryLimit: memoryLimit(),
 	}
+}
+
+// memoryLimit returns GOMEMLIMIT when set, otherwise the cgroup memory limit,
+// or 0 when the process has no memory limit
+func memoryLimit() uint64 {
+	if l := debug.SetMemoryLimit(-1); l > 0 && l < math.MaxInt64 {
+		return uint64(l)
+	}
+	return cgroupMemoryLimit()
 }
 
 // applyProfile applies a predefined workload profile to the config
 func applyProfile(config *Config, profile WorkloadProfile) {
-	resources := detectSystemResources()
+	applyProfileFor(config, profile, detectSystemResources())
+}
+
+func applyProfileFor(config *Config, profile WorkloadProfile, resources systemResources) {
 	numCPU := resources.numCPU
 
 	switch profile {
@@ -90,12 +105,15 @@ func applyProfile(config *Config, profile WorkloadProfile) {
 
 // applySystemAwareConfig applies system-aware configuration
 func applySystemAwareConfig(config *Config, sysConfig SystemAwareConfig) {
-	resources := detectSystemResources()
+	applySystemAwareConfigFor(config, sysConfig, detectSystemResources())
+}
+
+func applySystemAwareConfigFor(config *Config, sysConfig SystemAwareConfig, resources systemResources) {
 	numCPU := resources.numCPU
 
 	// Set defaults if not provided
 	if sysConfig.MemoryLimitPercent <= 0 || sysConfig.MemoryLimitPercent > 1.0 {
-		sysConfig.MemoryLimitPercent = 0.2 // Default to 20% of available memory
+		sysConfig.MemoryLimitPercent = 0.2 // Default to 20% of the memory limit
 	}
 
 	// Calculate worker counts based on workload type
@@ -117,8 +135,8 @@ func applySystemAwareConfig(config *Config, sysConfig SystemAwareConfig) {
 	}
 
 	// Calculate queue size based on memory constraints
-	if sysConfig.AvgJobMemoryBytes > 0 {
-		availableForQueue := float64(resources.availableMemory) * sysConfig.MemoryLimitPercent
+	if sysConfig.AvgJobMemoryBytes > 0 && resources.memoryLimit > 0 {
+		availableForQueue := float64(resources.memoryLimit) * sysConfig.MemoryLimitPercent
 		maxQueueByMemory := int(availableForQueue / float64(sysConfig.AvgJobMemoryBytes))
 
 		// Use memory-based calculation but ensure reasonable bounds

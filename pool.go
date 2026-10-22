@@ -66,6 +66,15 @@ func New(options ...Option) (Pool, error) {
 	for _, opt := range options {
 		opt(config)
 	}
+	// Auto-config only sets base values: apply it first, then the options
+	// again so an explicit option wins wherever it appears
+	if autoConfig := config.autoConfig; autoConfig != nil {
+		config = defaultConfig()
+		autoConfig(config)
+		for _, opt := range options {
+			opt(config)
+		}
+	}
 
 	// Validate configuration
 	if err := config.validate(); err != nil {
@@ -76,6 +85,14 @@ func New(options ...Option) (Pool, error) {
 	state := newPoolState(config.queueSize)
 
 	logger := newLogger(config)
+	if config.autoConfig != nil {
+		logger.Info("auto-config applied",
+			slog.Int("min_workers", config.minWorkers),
+			slog.Int("max_workers", config.maxWorkers),
+			slog.Int("queue_size", config.queueSize),
+			slog.Float64("scale_up_threshold", config.scaleUpThreshold),
+		)
+	}
 	metrics := newMetrics(state, config.recorder, logger)
 	if a, ok := config.recorder.(Attacher); ok {
 		info := PoolInfo{Name: config.name, MinWorkers: config.minWorkers, MaxWorkers: config.maxWorkers, QueueSize: config.queueSize}

@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"log/slog"
+	"os"
 	"runtime"
 	"time"
 
@@ -12,6 +14,9 @@ import (
 
 func main() {
 	fmt.Println("=== Auto-Configuration Examples ===")
+
+	// The pool logs the values auto-config chose ("auto-config applied")
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, nil)))
 
 	// Example 1: Simple profile-based configuration
 	example1ProfileBased()
@@ -41,8 +46,7 @@ func example1ProfileBased() {
 	metrics := pool.Metrics()
 	fmt.Printf("Profile: API Server (I/O Bound)\n")
 	fmt.Printf("Initial Workers: %d\n", metrics.ActiveWorkers())
-	fmt.Printf("Queue Capacity: %d\n", metrics.QueueCapacity())
-	fmt.Printf("System CPUs: %d\n\n", runtime.NumCPU())
+	fmt.Printf("Usable CPUs (GOMAXPROCS): %d\n\n", runtime.GOMAXPROCS(0))
 
 	// Submit some jobs
 	ctx := context.Background()
@@ -92,8 +96,7 @@ func example2SystemAware() {
 	fmt.Printf("Workload Type: I/O Bound\n")
 	fmt.Printf("Target Latency: 500ms\n")
 	fmt.Printf("Initial Workers: %d\n", metrics.ActiveWorkers())
-	fmt.Printf("Queue Capacity: %d\n", metrics.QueueCapacity())
-	fmt.Printf("System CPUs: %d\n\n", runtime.NumCPU())
+	fmt.Printf("Usable CPUs (GOMAXPROCS): %d\n\n", runtime.GOMAXPROCS(0))
 
 	// Submit jobs
 	ctx := context.Background()
@@ -135,7 +138,7 @@ func example3SuggestConfig() {
 		{"Mixed", adaptivepool.Mixed},
 	}
 
-	numCPU := runtime.NumCPU()
+	numCPU := runtime.GOMAXPROCS(0)
 	fmt.Printf("System CPUs: %d\n\n", numCPU)
 
 	for _, wt := range workloadTypes {
@@ -165,8 +168,7 @@ func example4ManualOverride() {
 	metrics := pool.Metrics()
 	fmt.Printf("Base Profile: CPU Intensive\n")
 	fmt.Printf("Overridden Min Workers: %d\n", metrics.ActiveWorkers())
-	fmt.Printf("Overridden Queue Capacity: %d\n", metrics.QueueCapacity())
-	fmt.Printf("System CPUs: %d\n\n", runtime.NumCPU())
+	fmt.Printf("Usable CPUs (GOMAXPROCS): %d\n\n", runtime.GOMAXPROCS(0))
 
 	// Shutdown
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

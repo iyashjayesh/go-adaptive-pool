@@ -12,9 +12,6 @@ type Metrics interface {
 	// QueueDepth returns the current number of jobs in the queue
 	QueueDepth() int
 
-	// QueueCapacity returns the maximum capacity of the queue
-	QueueCapacity() int
-
 	// ActiveWorkers returns the current number of active workers
 	ActiveWorkers() int
 
@@ -75,11 +72,6 @@ func newMetrics(state *poolState, rec Recorder, logger *slog.Logger) *metrics {
 // QueueDepth returns the current queue depth
 func (m *metrics) QueueDepth() int {
 	return m.state.getQueueDepth()
-}
-
-// QueueCapacity returns the maximum capacity of the queue
-func (m *metrics) QueueCapacity() int {
-	return m.state.getQueueCapacity()
 }
 
 // ActiveWorkers returns the current number of active workers

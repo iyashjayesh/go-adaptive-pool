@@ -19,6 +19,10 @@ type Config struct {
 	recorder              Recorder
 	onTaskDone            func(TaskResult)
 	retry                 *RetryPolicy
+
+	// autoConfig, set by WithAutoConfig or WithSystemAwareConfig, sets the
+	// base values that New applies before the other options
+	autoConfig func(*Config)
 }
 
 // Option is a functional option for configuring the pool
@@ -111,19 +115,23 @@ func WithLogger(l *slog.Logger) Option {
 	}
 }
 
-// WithAutoConfig applies a predefined workload profile for automatic configuration
-// This configures MinWorkers, MaxWorkers, and QueueSize based on system resources
+// WithAutoConfig sizes the pool from a predefined workload profile and the
+// CPUs available to the process: MinWorkers, MaxWorkers, QueueSize and
+// ScaleUpThreshold. Options such as WithMaxWorkers override these values
+// whatever their order. If both WithAutoConfig and WithSystemAwareConfig are
+// given, the last one wins.
 func WithAutoConfig(profile WorkloadProfile) Option {
 	return func(c *Config) {
-		applyProfile(c, profile)
+		c.autoConfig = func(c *Config) { applyProfile(c, profile) }
 	}
 }
 
-// WithSystemAwareConfig applies advanced system-aware configuration
-// This analyzes system resources and workload characteristics to optimize pool parameters
+// WithSystemAwareConfig sizes the pool from the workload type, the CPUs and
+// memory limit available to the process, and a latency target. Like
+// WithAutoConfig, it sets base values that other options override.
 func WithSystemAwareConfig(sysConfig SystemAwareConfig) Option {
 	return func(c *Config) {
-		applySystemAwareConfig(c, sysConfig)
+		c.autoConfig = func(c *Config) { applySystemAwareConfig(c, sysConfig) }
 	}
 }
 

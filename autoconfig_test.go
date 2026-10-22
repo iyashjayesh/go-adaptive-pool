@@ -1,311 +1,201 @@
 package adaptivepool
 
 import (
-	"context"
 	"runtime"
+	"runtime/debug"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestDetectSystemResources(t *testing.T) {
-	resources := detectSystemResources()
-
-	assert.Greater(t, resources.numCPU, 0, "should detect at least 1 CPU")
-	assert.Greater(t, resources.totalMemory, uint64(0), "should detect total memory")
-	assert.GreaterOrEqual(t, resources.totalMemory, resources.availableMemory, "total memory should be >= available memory")
+// setGOMAXPROCS sets GOMAXPROCS for the test and restores it afterwards
+func setGOMAXPROCS(t *testing.T, n int) {
+	t.Helper()
+	prev := runtime.GOMAXPROCS(n)
+	t.Cleanup(func() { runtime.GOMAXPROCS(prev) })
 }
 
-func TestApplyProfile_APIServer(t *testing.T) {
-	config := defaultConfig()
-	applyProfile(config, ProfileAPIServer)
+func TestDetectSystemResourcesUsesGOMAXPROCSAndMemoryLimit(t *testing.T) {
+	setGOMAXPROCS(t, 3)
+	prev := debug.SetMemoryLimit(256 << 20)
+	defer debug.SetMemoryLimit(prev)
 
-	numCPU := runtime.NumCPU()
-
-	assert.Equal(t, numCPU*2, config.minWorkers, "API server should have 2x CPU min workers")
-	assert.Equal(t, numCPU*10, config.maxWorkers, "API server should have 10x CPU max workers")
-	assert.Equal(t, config.maxWorkers*20, config.queueSize, "API server should have 20x max workers queue size")
-	assert.Equal(t, 0.6, config.scaleUpThreshold, "API server should have 0.6 scale up threshold")
-
-	err := config.validate()
-	assert.NoError(t, err, "profile config should be valid")
+	r := detectSystemResources()
+	assert.Equal(t, 3, r.numCPU, "should follow GOMAXPROCS, which honours container CPU limits")
+	assert.Equal(t, uint64(256<<20), r.memoryLimit, "should use GOMEMLIMIT when set")
 }
 
-func TestApplyProfile_CPUIntensive(t *testing.T) {
-	config := defaultConfig()
-	applyProfile(config, ProfileCPUIntensive)
-
-	numCPU := runtime.NumCPU()
-
-	assert.Equal(t, numCPU, config.minWorkers, "CPU intensive should have 1x CPU min workers")
-	assert.Equal(t, numCPU*2, config.maxWorkers, "CPU intensive should have 2x CPU max workers")
-	assert.Equal(t, config.maxWorkers*5, config.queueSize, "CPU intensive should have 5x max workers queue size")
-	assert.Equal(t, 0.8, config.scaleUpThreshold, "CPU intensive should have 0.8 scale up threshold")
-
-	err := config.validate()
-	assert.NoError(t, err, "profile config should be valid")
-}
-
-func TestApplyProfile_BatchProcessor(t *testing.T) {
-	config := defaultConfig()
-	applyProfile(config, ProfileBatchProcessor)
-
-	numCPU := runtime.NumCPU()
-
-	assert.Equal(t, numCPU*2, config.minWorkers, "Batch processor should have 2x CPU min workers")
-	assert.Equal(t, numCPU*4, config.maxWorkers, "Batch processor should have 4x CPU max workers")
-	assert.Equal(t, config.maxWorkers*50, config.queueSize, "Batch processor should have 50x max workers queue size")
-	assert.Equal(t, 0.7, config.scaleUpThreshold, "Batch processor should have 0.7 scale up threshold")
-
-	err := config.validate()
-	assert.NoError(t, err, "profile config should be valid")
-}
-
-func TestApplySystemAwareConfig_IOBound(t *testing.T) {
-	config := defaultConfig()
-	sysConfig := SystemAwareConfig{
-		WorkloadType:       IOBound,
-		TargetLatencyMs:    500,
-		AvgJobMemoryBytes:  50 * 1024, // 50KB
-		MemoryLimitPercent: 0.2,
-	}
-
-	applySystemAwareConfig(config, sysConfig)
-
-	numCPU := runtime.NumCPU()
-
-	assert.Equal(t, numCPU*2, config.minWorkers, "IO bound should have 2x CPU min workers")
-	assert.Equal(t, numCPU*8, config.maxWorkers, "IO bound should have 8x CPU max workers")
-	assert.Equal(t, 0.6, config.scaleUpThreshold, "IO bound should have 0.6 scale up threshold")
-	assert.Greater(t, config.queueSize, 0, "queue size should be positive")
-
-	err := config.validate()
-	assert.NoError(t, err, "system aware config should be valid")
-}
-
-func TestApplySystemAwareConfig_CPUBound(t *testing.T) {
-	config := defaultConfig()
-	sysConfig := SystemAwareConfig{
-		WorkloadType:       CPUBound,
-		TargetLatencyMs:    1000,
-		MemoryLimitPercent: 0.3,
-	}
-
-	applySystemAwareConfig(config, sysConfig)
-
-	numCPU := runtime.NumCPU()
-
-	assert.Equal(t, numCPU, config.minWorkers, "CPU bound should have 1x CPU min workers")
-	assert.Equal(t, numCPU*2, config.maxWorkers, "CPU bound should have 2x CPU max workers")
-	assert.Equal(t, 0.8, config.scaleUpThreshold, "CPU bound should have 0.8 scale up threshold")
-	assert.Equal(t, config.maxWorkers*5, config.queueSize, "CPU bound should have 5x max workers queue size")
-
-	err := config.validate()
-	assert.NoError(t, err, "system aware config should be valid")
-}
-
-func TestApplySystemAwareConfig_Mixed(t *testing.T) {
-	config := defaultConfig()
-	sysConfig := SystemAwareConfig{
-		WorkloadType:       Mixed,
-		MemoryLimitPercent: 0.25,
-	}
-
-	applySystemAwareConfig(config, sysConfig)
-
-	numCPU := runtime.NumCPU()
-
-	assert.Equal(t, numCPU, config.minWorkers, "Mixed should have 1x CPU min workers")
-	assert.Equal(t, numCPU*4, config.maxWorkers, "Mixed should have 4x CPU max workers")
-	assert.Equal(t, 0.7, config.scaleUpThreshold, "Mixed should have 0.7 scale up threshold")
-	assert.Equal(t, config.maxWorkers*10, config.queueSize, "Mixed should have 10x max workers queue size")
-
-	err := config.validate()
-	assert.NoError(t, err, "system aware config should be valid")
-}
-
-func TestApplySystemAwareConfig_MemoryConstraints(t *testing.T) {
-	config := defaultConfig()
-	sysConfig := SystemAwareConfig{
-		WorkloadType:       IOBound,
-		AvgJobMemoryBytes:  1024 * 1024, // 1MB per job
-		MemoryLimitPercent: 0.1,
-	}
-
-	applySystemAwareConfig(config, sysConfig)
-
-	// Queue size should be calculated based on memory
-	assert.Greater(t, config.queueSize, 0, "queue size should be positive")
-	assert.GreaterOrEqual(t, config.queueSize, config.maxWorkers*5, "queue size should be at least 5x max workers")
-
-	err := config.validate()
-	assert.NoError(t, err, "memory-constrained config should be valid")
-}
-
-func TestApplySystemAwareConfig_LowLatencyTarget(t *testing.T) {
-	config := defaultConfig()
-	sysConfig := SystemAwareConfig{
-		WorkloadType:       IOBound,
-		TargetLatencyMs:    50, // Low latency target
-		MemoryLimitPercent: 0.2,
-	}
-
-	applySystemAwareConfig(config, sysConfig)
-
-	assert.Equal(t, 0.5, config.scaleUpThreshold, "low latency should have aggressive 0.5 scale up threshold")
-
-	err := config.validate()
-	assert.NoError(t, err, "low latency config should be valid")
-}
-
-func TestApplySystemAwareConfig_MediumLatencyTarget(t *testing.T) {
-	config := defaultConfig()
-	sysConfig := SystemAwareConfig{
-		WorkloadType:       IOBound,
-		TargetLatencyMs:    200, // Medium latency target
-		MemoryLimitPercent: 0.2,
-	}
-
-	applySystemAwareConfig(config, sysConfig)
-
-	assert.Equal(t, 0.6, config.scaleUpThreshold, "medium latency should have 0.6 scale up threshold")
-
-	err := config.validate()
-	assert.NoError(t, err, "medium latency config should be valid")
-}
-
-func TestApplySystemAwareConfig_DefaultMemoryLimit(t *testing.T) {
-	config := defaultConfig()
-	sysConfig := SystemAwareConfig{
-		WorkloadType:       IOBound,
-		MemoryLimitPercent: 0, // Should use default
-	}
-
-	applySystemAwareConfig(config, sysConfig)
-
-	// Should not panic and should produce valid config
-	err := config.validate()
-	assert.NoError(t, err, "config with default memory limit should be valid")
-}
-
-func TestSuggestConfig(t *testing.T) {
+func TestParseCgroupMemoryLimit(t *testing.T) {
 	tests := []struct {
-		name         string
-		workloadType WorkloadType
+		in   string
+		want uint64
 	}{
-		{"IOBound", IOBound},
-		{"CPUBound", CPUBound},
-		{"Mixed", Mixed},
+		{"max\n", 0},                 // v2, no limit
+		{"9223372036854771712\n", 0}, // v1, no limit
+		{"1073741824\n", 1 << 30},    // 1GiB
+		{"536870912", 512 << 20},     // no trailing newline
+		{"garbage", 0},
 	}
+	for _, tt := range tests {
+		assert.Equal(t, tt.want, parseCgroupMemoryLimit(tt.in), "input %q", tt.in)
+	}
+}
 
+func TestApplyProfile(t *testing.T) {
+	res := systemResources{numCPU: 4}
+	tests := []struct {
+		profile           WorkloadProfile
+		minW, maxW, queue int
+		threshold         float64
+	}{
+		{ProfileAPIServer, 8, 40, 800, 0.6},
+		{ProfileCPUIntensive, 4, 8, 40, 0.8},
+		{ProfileBatchProcessor, 8, 16, 800, 0.7},
+	}
+	for _, tt := range tests {
+		c := defaultConfig()
+		applyProfileFor(c, tt.profile, res)
+		assert.Equal(t, tt.minW, c.minWorkers, "profile %d min workers", tt.profile)
+		assert.Equal(t, tt.maxW, c.maxWorkers, "profile %d max workers", tt.profile)
+		assert.Equal(t, tt.queue, c.queueSize, "profile %d queue size", tt.profile)
+		assert.Equal(t, tt.threshold, c.scaleUpThreshold, "profile %d threshold", tt.profile)
+		assert.NoError(t, c.validate())
+	}
+}
+
+func TestApplySystemAwareConfigWorkloadTypes(t *testing.T) {
+	res := systemResources{numCPU: 4} // no memory limit: default queue sizes
+	tests := []struct {
+		wt                WorkloadType
+		minW, maxW, queue int
+		threshold         float64
+	}{
+		{IOBound, 8, 32, 640, 0.6},
+		{CPUBound, 4, 8, 40, 0.8},
+		{Mixed, 4, 16, 160, 0.7},
+	}
+	for _, tt := range tests {
+		c := defaultConfig()
+		applySystemAwareConfigFor(c, SystemAwareConfig{WorkloadType: tt.wt}, res)
+		assert.Equal(t, tt.minW, c.minWorkers, "type %d min workers", tt.wt)
+		assert.Equal(t, tt.maxW, c.maxWorkers, "type %d max workers", tt.wt)
+		assert.Equal(t, tt.queue, c.queueSize, "type %d queue size", tt.wt)
+		assert.Equal(t, tt.threshold, c.scaleUpThreshold, "type %d threshold", tt.wt)
+		assert.NoError(t, c.validate())
+	}
+}
+
+func TestApplySystemAwareConfigSizesQueueFromMemoryLimit(t *testing.T) {
+	sys := SystemAwareConfig{WorkloadType: IOBound, AvgJobMemoryBytes: 50 * 1024, MemoryLimitPercent: 0.2}
+	// IOBound on 2 CPUs: 16 max workers, so the queue is bounded to [80, 1600]
+	tests := []struct {
+		name        string
+		memoryLimit uint64
+		want        int
+	}{
+		{"fits", 64 << 20, 262}, // 64MiB * 0.2 / 50KiB
+		{"floor", 1 << 20, 80},  // 1MiB fits only 4 jobs
+		{"cap", 64 << 30, 1600}, // 64GiB fits far more than 100x workers
+		{"no limit", 0, 320},    // falls back to the IOBound default, 20x workers
+	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			config := SuggestConfig(tt.workloadType)
-
-			require.NotNil(t, config, "suggested config should not be nil")
-			assert.Greater(t, config.minWorkers, 0, "min workers should be positive")
-			assert.Greater(t, config.maxWorkers, 0, "max workers should be positive")
-			assert.Greater(t, config.queueSize, 0, "queue size should be positive")
-			assert.GreaterOrEqual(t, config.maxWorkers, config.minWorkers, "max workers should be >= min workers")
-
-			err := config.validate()
-			assert.NoError(t, err, "suggested config should be valid")
+			c := defaultConfig()
+			applySystemAwareConfigFor(c, sys, systemResources{numCPU: 2, memoryLimit: tt.memoryLimit})
+			assert.Equal(t, tt.want, c.queueSize)
 		})
 	}
 }
 
-func TestWithAutoConfig(t *testing.T) {
-	tests := []struct {
-		name    string
-		profile WorkloadProfile
-	}{
-		{"APIServer", ProfileAPIServer},
-		{"CPUIntensive", ProfileCPUIntensive},
-		{"BatchProcessor", ProfileBatchProcessor},
+func TestApplySystemAwareConfigDefaultsMemoryLimitPercent(t *testing.T) {
+	res := systemResources{numCPU: 2, memoryLimit: 64 << 20}
+	for _, pct := range []float64{0, -1, 1.5} {
+		c := defaultConfig()
+		applySystemAwareConfigFor(c, SystemAwareConfig{WorkloadType: IOBound, AvgJobMemoryBytes: 50 * 1024, MemoryLimitPercent: pct}, res)
+		assert.Equal(t, 262, c.queueSize, "MemoryLimitPercent %v should fall back to 0.2", pct)
 	}
+}
 
+func TestApplySystemAwareConfigLatencyTarget(t *testing.T) {
+	res := systemResources{numCPU: 2}
+	tests := []struct {
+		latencyMs int
+		want      float64
+	}{
+		{50, 0.5},   // below 100ms: most aggressive
+		{300, 0.6},  // below 500ms
+		{1000, 0.8}, // a relaxed target keeps the CPUBound default
+		{0, 0.8},    // no target
+	}
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			pool, err := New(WithAutoConfig(tt.profile))
+		c := defaultConfig()
+		applySystemAwareConfigFor(c, SystemAwareConfig{WorkloadType: CPUBound, TargetLatencyMs: tt.latencyMs}, res)
+		assert.Equal(t, tt.want, c.scaleUpThreshold, "latency target %dms", tt.latencyMs)
+	}
+}
 
-			require.NoError(t, err, "should create pool with auto config")
-			require.NotNil(t, pool, "pool should not be nil")
+func TestSuggestConfigIsValid(t *testing.T) {
+	for _, wt := range []WorkloadType{IOBound, CPUBound, Mixed} {
+		c := SuggestConfig(wt)
+		require.NotNil(t, c)
+		assert.NoError(t, c.validate(), "workload type %d", wt)
+		assert.Equal(t, c.minWorkers, c.MinWorkers())
+		assert.Equal(t, c.maxWorkers, c.MaxWorkers())
+		assert.Equal(t, c.queueSize, c.QueueSize())
+	}
+}
 
-			metrics := pool.Metrics()
-			assert.Greater(t, metrics.ActiveWorkers(), 0, "should have workers")
+func TestWithAutoConfigCreatesPool(t *testing.T) {
+	for _, profile := range []WorkloadProfile{ProfileAPIServer, ProfileCPUIntensive, ProfileBatchProcessor} {
+		p := newTestPool(t, WithLogger(discardLogger()), WithAutoConfig(profile))
+		assert.Greater(t, p.Metrics().ActiveWorkers(), 0, "profile %d", profile)
+	}
+}
 
-			// Cleanup
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			err = pool.Shutdown(ctx)
-			assert.NoError(t, err, "should shutdown cleanly")
+// Explicit options override auto-config whatever their order, so placing
+// WithMaxWorkers before WithAutoConfig no longer loses it silently.
+func TestExplicitOptionsOverrideAutoConfigInAnyOrder(t *testing.T) {
+	setGOMAXPROCS(t, 2)
+	orders := map[string][]Option{
+		"before": {WithMaxWorkers(4), WithMinWorkers(2), WithAutoConfig(ProfileAPIServer)},
+		"after":  {WithAutoConfig(ProfileAPIServer), WithMaxWorkers(4), WithMinWorkers(2)},
+	}
+	for name, opts := range orders {
+		t.Run(name, func(t *testing.T) {
+			p := newTestPool(t, append(opts, WithLogger(discardLogger()))...)
+			c := p.(*pool).config
+			assert.Equal(t, 4, c.maxWorkers, "explicit max workers")
+			assert.Equal(t, 2, c.minWorkers, "explicit min workers")
+			assert.Equal(t, 400, c.queueSize, "queue size still comes from the profile (20x 10x2 CPUs)")
+			assert.Equal(t, 0.6, c.scaleUpThreshold, "threshold still comes from the profile")
 		})
 	}
 }
 
-func TestWithSystemAwareConfig(t *testing.T) {
-	sysConfig := SystemAwareConfig{
-		WorkloadType:       IOBound,
-		TargetLatencyMs:    500,
-		AvgJobMemoryBytes:  50 * 1024,
-		MemoryLimitPercent: 0.2,
-	}
-
-	pool, err := New(WithSystemAwareConfig(sysConfig))
-
-	require.NoError(t, err, "should create pool with system aware config")
-	require.NotNil(t, pool, "pool should not be nil")
-
-	metrics := pool.Metrics()
-	assert.Greater(t, metrics.ActiveWorkers(), 0, "should have workers")
-
-	// Cleanup
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	err = pool.Shutdown(ctx)
-	assert.NoError(t, err, "should shutdown cleanly")
+func TestLastAutoConfigOptionWins(t *testing.T) {
+	setGOMAXPROCS(t, 2)
+	p := newTestPool(t, WithLogger(discardLogger()),
+		WithAutoConfig(ProfileCPUIntensive),
+		WithSystemAwareConfig(SystemAwareConfig{WorkloadType: IOBound}))
+	assert.Equal(t, 16, p.(*pool).config.maxWorkers, "IOBound: 8x 2 CPUs")
 }
 
-func TestAutoConfig_CanOverrideWithOtherOptions(t *testing.T) {
-	// Auto config followed by manual override
-	pool, err := New(
-		WithAutoConfig(ProfileAPIServer),
-		WithMinWorkers(5), // Override min workers
-	)
+func TestAutoConfigLogsResolvedValues(t *testing.T) {
+	setGOMAXPROCS(t, 2)
+	logs := &logRecorder{}
+	newTestPool(t, WithLogger(logs.logger()), WithAutoConfig(ProfileCPUIntensive), WithQueueSize(100))
 
-	require.NoError(t, err, "should create pool with overridden config")
-	require.NotNil(t, pool, "pool should not be nil")
+	recs := logs.records("auto-config applied")
+	require.Len(t, recs, 1)
+	assert.EqualValues(t, 2, recs[0]["min_workers"])
+	assert.EqualValues(t, 4, recs[0]["max_workers"])
+	assert.EqualValues(t, 100, recs[0]["queue_size"], "logs the final value, after explicit options")
+	assert.EqualValues(t, 0.8, recs[0]["scale_up_threshold"])
 
-	metrics := pool.Metrics()
-	assert.Equal(t, 5, metrics.ActiveWorkers(), "should respect manual override")
-
-	// Cleanup
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	err = pool.Shutdown(ctx)
-	assert.NoError(t, err, "should shutdown cleanly")
-}
-
-func TestSystemAwareConfig_QueueSizeBounds(t *testing.T) {
-	config := defaultConfig()
-
-	// Test with very large memory per job (should hit minimum bound)
-	sysConfig := SystemAwareConfig{
-		WorkloadType:       IOBound,
-		AvgJobMemoryBytes:  100 * 1024 * 1024, // 100MB per job
-		MemoryLimitPercent: 0.1,
-	}
-
-	applySystemAwareConfig(config, sysConfig)
-
-	// Should be at minimum bound
-	minBound := config.maxWorkers * 5
-	assert.GreaterOrEqual(t, config.queueSize, minBound, "should respect minimum queue size bound")
-
-	err := config.validate()
-	assert.NoError(t, err, "config should be valid")
+	plain := &logRecorder{}
+	newTestPool(t, WithLogger(plain.logger()))
+	assert.Empty(t, plain.records("auto-config applied"), "nothing to log without auto-config")
 }
 
 func BenchmarkApplyProfile(b *testing.B) {

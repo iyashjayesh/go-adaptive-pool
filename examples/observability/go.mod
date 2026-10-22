@@ -3,7 +3,7 @@ module github.com/iyashjayesh/go-adaptive-pool/examples/observability
 go 1.25.0
 
 require (
-	github.com/iyashjayesh/go-adaptive-pool v0.0.0
+	github.com/iyashjayesh/go-adaptive-pool v0.1.0
 	github.com/iyashjayesh/go-adaptive-pool/promrecorder v0.0.0
 	github.com/prometheus/client_golang v1.23.2
 )

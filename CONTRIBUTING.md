@@ -42,8 +42,11 @@ Just open an issue if you're unsure about something.
 
 The core module has no dependency on any metrics backend. `promrecorder`,
 `otelrecorder` and `examples/observability` are separate modules with their own
-`go.mod`; each uses a `replace` directive to build against the core in this
-checkout. Dependencies are tidied per module: `cd <module> && go mod tidy`.
+`go.mod`. The adapters require a published core version, so their tests run
+against that release, not this checkout. If a change touches both the core and
+an adapter, add `replace github.com/iyashjayesh/go-adaptive-pool => ../` to the
+adapter's `go.mod` while you work, and remove it before the change is released.
+Dependencies are tidied per module: `cd <module> && go mod tidy`.
 
 Sub-modules are tagged with their directory as a prefix. To release:
 

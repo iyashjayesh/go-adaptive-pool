@@ -213,7 +213,7 @@ pool, _ := adaptivepool.New(
 http.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
 ```
 
-With OpenTelemetry, use `otelrecorder.New(meterProvider)` instead; any other backend needs a four-method `Recorder`. See [Metrics](docs/RETRY_AND_OBSERVABILITY.md#metrics).
+With OpenTelemetry, use `otelrecorder.New(meterProvider)` instead; any other backend needs a five-method `Recorder`. See [Metrics](docs/RETRY_AND_OBSERVABILITY.md#metrics).
 
 In-process metrics are always available:
 
@@ -223,7 +223,7 @@ metrics := pool.Metrics()
 fmt.Printf("Queue Depth: %d\n", metrics.QueueDepth())
 fmt.Printf("Active / Busy Workers: %d / %d\n", metrics.ActiveWorkers(), metrics.BusyWorkers())
 fmt.Printf("Jobs Processed / Failed: %d / %d\n", metrics.JobsProcessed(), metrics.JobsFailed())
-fmt.Printf("Jobs Rejected: %d\n", metrics.JobsRejected())
+fmt.Printf("Jobs Rejected / Dropped: %d / %d\n", metrics.JobsRejected(), metrics.JobsDropped())
 fmt.Printf("Retries: %d\n", metrics.RetryAttempts())
 fmt.Printf("Avg Latency / Queue Wait: %v / %v\n", metrics.AvgJobLatency(), metrics.AvgQueueWait())
 ```

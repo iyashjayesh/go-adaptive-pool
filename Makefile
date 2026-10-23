@@ -1,4 +1,4 @@
-.PHONY: all build test lint bench run-http run-batch run-observability help clean
+.PHONY: all build test lint bench run-autoconfig run-http run-batch run-observability help clean
 
 # Go parameters
 GOCMD=go
@@ -27,6 +27,7 @@ help:
 	@echo "  test          Run unit tests with race detector and coverage"
 	@echo "  lint          Run golangci-lint"
 	@echo "  bench         Run all benchmarks"
+	@echo "  run-autoconfig Run the auto-configuration example"
 	@echo "  run-http      Run the HTTP server example"
 	@echo "  run-batch     Run the batch processor example"
 	@echo "  run-observability Run the Prometheus/Grafana observability example"
@@ -49,6 +50,10 @@ lint:
 bench:
 	@echo "Running benchmarks..."
 	$(call each,$(TESTED_MODULES),$(GOTEST) -bench=. -benchmem ./...)
+
+run-autoconfig:
+	@echo "Running auto-configuration example..."
+	$(GOCMD) run examples/autoconfig/main.go
 
 run-http:
 	@echo "Running HTTP server example..."

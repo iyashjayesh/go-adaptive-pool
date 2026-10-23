@@ -19,6 +19,10 @@ type Config struct {
 	recorder              Recorder
 	onTaskDone            func(TaskResult)
 	retry                 *RetryPolicy
+
+	// autoConfig, set by WithAutoConfig or WithSystemAwareConfig, sets the
+	// base values that New applies before the other options
+	autoConfig func(*Config)
 }
 
 // Option is a functional option for configuring the pool
@@ -111,6 +115,26 @@ func WithLogger(l *slog.Logger) Option {
 	}
 }
 
+// WithAutoConfig sizes the pool from a predefined workload profile and the
+// CPUs available to the process: MinWorkers, MaxWorkers, QueueSize and
+// ScaleUpThreshold. Options such as WithMaxWorkers override these values
+// whatever their order. If both WithAutoConfig and WithSystemAwareConfig are
+// given, the last one wins.
+func WithAutoConfig(profile WorkloadProfile) Option {
+	return func(c *Config) {
+		c.autoConfig = func(c *Config) { applyProfile(c, profile) }
+	}
+}
+
+// WithSystemAwareConfig sizes the pool from the workload type, the CPUs and
+// memory limit available to the process, and a latency target. Like
+// WithAutoConfig, it sets base values that other options override.
+func WithSystemAwareConfig(sysConfig SystemAwareConfig) Option {
+	return func(c *Config) {
+		c.autoConfig = func(c *Config) { applySystemAwareConfig(c, sysConfig) }
+	}
+}
+
 // defaultConfig returns the default configuration
 func defaultConfig() *Config {
 	return &Config{
@@ -147,4 +171,34 @@ func (c *Config) validate() error {
 		return c.retry.validate()
 	}
 	return nil
+}
+
+// MinWorkers returns the minimum number of workers
+func (c *Config) MinWorkers() int {
+	return c.minWorkers
+}
+
+// MaxWorkers returns the maximum number of workers
+func (c *Config) MaxWorkers() int {
+	return c.maxWorkers
+}
+
+// QueueSize returns the queue size
+func (c *Config) QueueSize() int {
+	return c.queueSize
+}
+
+// ScaleUpThreshold returns the scale up threshold
+func (c *Config) ScaleUpThreshold() float64 {
+	return c.scaleUpThreshold
+}
+
+// ScaleDownIdleDuration returns the scale down idle duration
+func (c *Config) ScaleDownIdleDuration() time.Duration {
+	return c.scaleDownIdleDuration
+}
+
+// ScaleCooldown returns the scale cooldown duration
+func (c *Config) ScaleCooldown() time.Duration {
+	return c.scaleCooldown
 }

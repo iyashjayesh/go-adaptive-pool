@@ -100,6 +100,55 @@ func main() {
 
 ## Configuration Options
 
+### Auto-Configuration
+
+Auto-configuration sizes the pool from a workload profile and the resources available to the process. CPUs are counted with `GOMAXPROCS`, which follows container CPU limits on Linux:
+
+```go
+// Simple profile-based configuration
+pool, err := adaptivepool.New(
+    adaptivepool.WithAutoConfig(adaptivepool.ProfileAPIServer),
+)
+
+// Advanced system-aware configuration
+pool, err := adaptivepool.New(
+    adaptivepool.WithSystemAwareConfig(adaptivepool.SystemAwareConfig{
+        WorkloadType:       adaptivepool.IOBound,
+        TargetLatencyMs:    500,
+        AvgJobMemoryBytes:  50 * 1024, // 50KB per job
+        MemoryLimitPercent: 0.2,       // Queue may use 20% of the memory limit
+    }),
+)
+
+// Get configuration suggestions
+config := adaptivepool.SuggestConfig(adaptivepool.IOBound)
+fmt.Printf("Suggested min workers: %d\n", config.MinWorkers())
+fmt.Printf("Suggested max workers: %d\n", config.MaxWorkers())
+fmt.Printf("Suggested queue size: %d\n", config.QueueSize())
+```
+
+**Available Workload Profiles:**
+
+| Profile | Use Case | Min Workers | Max Workers | Queue Size |
+|---------|----------|-------------|-------------|------------|
+| `ProfileAPIServer` | I/O bound API servers | 2x CPUs | 10x CPUs | 20x Max Workers |
+| `ProfileCPUIntensive` | CPU-bound tasks | 1x CPUs | 2x CPUs | 5x Max Workers |
+| `ProfileBatchProcessor` | Batch processing | 2x CPUs | 4x CPUs | 50x Max Workers |
+
+**Workload Types for System-Aware Config:**
+
+- `IOBound` - Tasks that spend most time waiting on I/O (network, disk, databases)
+- `CPUBound` - Compute-intensive tasks that max out CPU
+- `Mixed` - Workloads with both I/O and CPU characteristics
+
+With `AvgJobMemoryBytes` set, the queue is sized so queued jobs use at most `MemoryLimitPercent` of the process memory limit, kept between 5x and 100x max workers. The limit is `GOMEMLIMIT` when set, otherwise the container's cgroup memory limit on Linux. Without either, the queue size is the workload type's default.
+
+The pool logs the values it chose at startup (`auto-config applied`).
+
+### Manual Configuration
+
+For fine-grained control, configure parameters manually:
+
 ```go
 pool, err := adaptivepool.New(
     // Minimum workers (default: 1)
@@ -134,6 +183,18 @@ pool, err := adaptivepool.New(
 
     // Retry failed jobs (default: disabled)
     adaptivepool.WithRetry(adaptivepool.RetryPolicy{MaxAttempts: 3}),
+)
+```
+
+### Combining Auto-Config with Manual Overrides
+
+Auto-config only sets base values. Explicit options such as `WithMinWorkers` override them, wherever they appear in the list:
+
+```go
+pool, err := adaptivepool.New(
+    adaptivepool.WithAutoConfig(adaptivepool.ProfileAPIServer),
+    adaptivepool.WithMinWorkers(8), // Override min workers
+    adaptivepool.WithQueueSize(10000), // Override queue size
 )
 ```
 
@@ -247,6 +308,19 @@ Shutdown behavior:
 4. If the timeout expires, drops queued jobs (each reported to `OnTaskDone` with status `shutdown`) and returns a `*ShutdownError` with the count, which wraps the context error
 
 ## Examples
+
+### Auto-Configuration
+
+See [examples/autoconfig](examples/autoconfig/main.go) for demonstrations of:
+- Profile-based auto-configuration
+- System-aware configuration with memory constraints
+- Configuration suggestions for different workload types
+- Combining auto-config with manual overrides
+
+```bash
+cd examples/autoconfig
+go run main.go
+```
 
 ### HTTP Server with Backpressure
 
